@@ -6,7 +6,7 @@ and workers. Multiple copies run as a Deployment. PostgreSQL is the durable coor
 and storage layer, managed separately by CloudNativePG. SMTP is an external protocol
 endpoint operated by the deployer; no SaaS is required.
 
-## Data model (planned; no migrations implemented yet)
+## Data model (planned; product schema not yet implemented)
 - Tenant and membership: customer boundary; membership maps trusted OIDC issuer + subject
   to tenant + role. One identity can have multiple explicit memberships.
 - Site: tenant ID, public slug, verified domain and ownership proof state.

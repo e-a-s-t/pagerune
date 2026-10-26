@@ -1,20 +1,29 @@
 {
-  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/main/.schema/devbox.schema.json",
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.14.2/.schema/devbox.schema.json",
   "packages": [
-    "rustup@1.28.2",
-    "postgresql@17",
-    "git@latest",
-    "curl@latest",
-    "openssl@latest",
-    "pkg-config@latest"
+    "rustc@1.90.0",
+    "cargo@1.90.0",
+    "rustfmt@1.90.0",
+    "clippy@1.90.0",
+    "rust-analyzer@2025-02-10",
+    "cargo-edit@0.13.4",
+    "jq@1.7.1",
+    "git@2.54.0"
   ],
+  "nixpkgs": {
+    "commit": "329c3d2af6d1b618705150ea39f72c15eb4e613e"
+  },
   "shell": {
     "scripts": {
-      "run": "cargo run",
-      "fmt": "cargo fmt --all",
-      "check": "cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all-targets --all-features",
-      "test": "cargo test --all-targets --all-features",
-      "build": "cargo build --release"
+      "build":         "cargo build",
+      "build-release": "cargo build --release",
+      "run":           "cargo run",
+      "migrate":       "cargo run -- migrate",
+      "test":          "cargo test",
+      "fmt":           "cargo fmt",
+      "fmt-check":     "cargo fmt --check",
+      "lint":          "cargo clippy --all-targets --all-features -- -D warnings",
+      "check":         "set -e; cargo fmt --check; cargo clippy --all-targets --all-features -- -D warnings; cargo test"
     }
   }
 }

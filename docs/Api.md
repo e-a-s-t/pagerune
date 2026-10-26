@@ -3,8 +3,10 @@
 ## Current scaffold
 Generated OpenAPI: `GET /api/openapi.json`. Bundled Swagger UI: `GET /swagger-ui/`.
 Implemented operations only: `GET /healthz` (200), `GET /readyz` (200 or 503 based on
-PostgreSQL reachability). Infrastructure/docs routes are public. The OpenAPI document
-must never claim business routes are implemented before they are registered and secured.
+PostgreSQL reachability). Error responses use `{code, message, request_id}` and do not
+include provider details. Unknown routes use the same error shape. Infrastructure and
+documentation routes are public. The OpenAPI document must never claim business routes are
+implemented before they are registered and secured.
 
 ## Planned business APIs
 All under `/api/v1`. Every implemented endpoint must define request/response schemas,

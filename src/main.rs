@@ -1,26 +1,35 @@
 use anyhow::Context;
-use pagerune::{AppState, app};
+use pagerune::{AppState, app, config::Config};
 use sqlx::postgres::PgPoolOptions;
-use std::{env, net::SocketAddr, time::Duration};
+use std::{env, time::Duration};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .json()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "pagerune=info".into()))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| "pagerune=info".into()),
+        )
         .init();
-    let bind: SocketAddr = env::var("PAGERUNE_BIND")
-        .unwrap_or_else(|_| "127.0.0.1:8080".into())
-        .parse()
-        .context("invalid PAGERUNE_BIND")?;
-    let database_url = env::var("DATABASE_URL").context("DATABASE_URL is required")?;
+    let config = Config::from_env()?;
     let database = PgPoolOptions::new()
         .max_connections(5)
         .acquire_timeout(Duration::from_secs(3))
-        .connect_lazy(&database_url)?;
-    let listener = tokio::net::TcpListener::bind(bind).await?;
-    tracing::info!(%bind, "PageRune scaffold listening");
+        .connect_lazy_with(config.database);
+
+    if env::args().nth(1).as_deref() == Some("migrate") {
+        sqlx::migrate!()
+            .run(&database)
+            .await
+            .context("applying database migrations")?;
+        tracing::info!("database migrations applied");
+        return Ok(());
+    }
+
+    let listener = tokio::net::TcpListener::bind(config.bind).await?;
+    let bind = listener.local_addr()?;
+    tracing::info!(%bind, "PageRune listening");
     axum::serve(listener, app(AppState { database }))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
@@ -28,7 +37,11 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn shutdown_signal() {
-    let ctrl_c = async { tokio::signal::ctrl_c().await.expect("install Ctrl+C handler") };
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("install Ctrl+C handler")
+    };
     #[cfg(unix)]
     let terminate = async {
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())

@@ -1,13 +1,15 @@
 # Test cases
 
-Status: PLANNED unless explicitly marked AUTHORED. Authored does not mean executed.
+Status: PLANNED unless explicitly marked IMPLEMENTED. Implemented does not mean executed.
 Use local PostgreSQL for integration tests, never SQLite substitutes. SMTP tests use
 a local capture server. OIDC tests use controlled discovery/JWKS and invalid-token fixtures.
 
 | ID | Scenario | Expected result | Layer / status |
 |---|---|---|---|
-| OPS-01 | Process without reachable database | /healthz 200; /readyz 503 | HTTP / AUTHORED |
-| API-01 | Fetch OpenAPI | Every implemented operation and error response described | Contract / AUTHORED |
+| OPS-01 | Process without reachable database | /healthz 200; /readyz 503 | HTTP / IMPLEMENTED |
+| API-01 | Fetch OpenAPI | Every implemented operation and error response described | Contract / IMPLEMENTED |
+| CFG-00 | Missing, malformed or non-PostgreSQL config | Startup validation rejects it without echoing secrets | Unit / IMPLEMENTED |
+| DB-00 | PostgreSQL connectivity and baseline migration | `SELECT 1` succeeds and migration version is recorded | PostgreSQL integration / IMPLEMENTED |
 | OWN-01 | Site ownership not verified | Cannot activate watches or publish subscription form | Integration |
 | TEN-01 | Tenant A requests B site/watch IDs | No disclosure or mutation; composite FK prevents cross-link | Integration |
 | TEN-02 | Same person subscribes to two tenants | Single daily digest; owners see only their own contact scope | Integration |
@@ -47,6 +49,7 @@ a local capture server. OIDC tests use controlled discovery/JWKS and invalid-tok
 | UI-01 | Owner creates/edits/pauses watch and copies links | Correct URLs; paused watch not polled | Browser |
 | OPS-02 | SIGTERM/restart, backup/restore | Durable jobs recover; no app PVC dependency | Deployment |
 
-Scaffold tests are in tests/http.rs. Run `direnv exec . devbox run check`.
-No Rust toolchain was available in the scaffolding environment; initial compilation and
-lockfile generation must be completed in the Devbox environment before implementation.
+Phase 1 tests are in `src/config.rs` and `tests/http.rs`. Run
+`direnv exec . devbox run check` with local PostgreSQL available; this runs formatting,
+Clippy, unit tests and PostgreSQL integration tests. The Devbox and Cargo lockfiles are
+committed so the configured toolchain and resolved dependencies stay reproducible.

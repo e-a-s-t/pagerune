@@ -4,11 +4,13 @@
 | Variable | Meaning | Default |
 |---|---|---|
 | PAGERUNE_BIND | HTTP socket address | 127.0.0.1:8080 |
-| DATABASE_URL | PostgreSQL URL, including TLS settings | Required |
+| DATABASE_URL | PostgreSQL URL, including TLS settings | Required; PostgreSQL scheme only |
 | RUST_LOG | tracing filter | pagerune=info |
 
-The readiness probe executes SELECT 1. It does not yet validate schema migrations or
-worker readiness. Database pool is currently capped at 5 connections per replica;
+Startup rejects malformed bind addresses, missing or invalid PostgreSQL URLs, and other
+database schemes. Configuration errors do not include URL credentials. The readiness probe
+executes SELECT 1. It does not validate migration or worker readiness. Database pool is
+currently capped at 5 connections per replica;
 make limits configurable during worker implementation and size against CNPG capacity.
 
 ## Planned contract (not read by scaffold yet)

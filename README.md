@@ -5,34 +5,36 @@ and visitors subscribe to all updates or selected topics. Pages are checked once
 before a daily combined digest. Update links go directly to the original pages.
 
 ## Status
-**Scaffold, not a complete or deployable subscription service.** Implemented:
-Rust/Axum HTTP server, PostgreSQL readiness, JSON logs, graceful shutdown, generated
-OpenAPI at `/api/openapi.json` and bundled Swagger UI at `/swagger-ui/`.
-Business endpoints, OIDC, frontend, checking and email workers are planned, not implemented.
-No authentication-protected business functionality is exposed by this scaffold.
+**Application foundation, not a complete or deployable subscription service.** Implemented:
+Rust/Axum HTTP server, validated PostgreSQL configuration, SQLx migrations, database
+readiness, JSON logs, graceful shutdown, generated OpenAPI at `/api/openapi.json` and
+bundled Swagger UI at `/swagger-ui/`. Tenant/business endpoints, OIDC, frontend, checking
+and email workers are not implemented.
 
 ## Development
 Prerequisites: install Devbox, direnv with its shell hook enabled, and Docker Compose. The
 Rust application runs locally through Devbox; the existing Compose file runs PostgreSQL
-and Mailpit.
+and Mailpit. See [the local development guide](docs/Development.md) for details.
 
 ```sh
 cp .env.example .env
-# Review .env settings; it is ignored by Git.
+# Review local values; .env is ignored by Git.
+devbox install
 direnv allow
 direnv exec . docker compose up -d
+direnv exec . devbox run migrate
 direnv exec . devbox run run
 ```
 
-Run `direnv exec . devbox run check` for formatting, Clippy, and tests. PostgreSQL
-data persists in a Compose volume when containers are stopped with
-`direnv exec . docker compose down`. Swagger UI is at
-http://127.0.0.1:8080/swagger-ui/ and Mailpit at http://127.0.0.1:8025.
-The scaffold does not yet include migrations or SMTP sending; see the
-[local development guide](docs/Development.md) for details and container commands.
+In another terminal, run `direnv exec . devbox run check` for formatting, Clippy, unit
+tests, and PostgreSQL integration tests. Stop services with
+`direnv exec . docker compose down`; PostgreSQL data remains in its Compose volume. Swagger
+UI is at http://127.0.0.1:8080/swagger-ui/ and Mailpit at http://127.0.0.1:8025. Run the
+migration command again after pulling migration changes.
 
-First setup downloads toolchain/dependencies. Commit the tool-generated `devbox.lock`
-and `Cargo.lock` once generated. This scaffold contains neither fabricated lockfile.
+First setup downloads the pinned toolchain and dependencies. `devbox.lock` and
+`Cargo.lock` are generated lockfiles and are committed to keep the development
+environment and Rust dependency resolution reproducible.
 The application intentionally does not load `.env`; direnv supplies the environment.
 CI must run the same Devbox scripts with its environment injected explicitly.
 
