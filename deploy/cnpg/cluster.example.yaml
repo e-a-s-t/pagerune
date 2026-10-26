@@ -1,0 +1,20 @@
+# Example only. Requires an installed CloudNativePG operator.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pagerune-db
+spec:
+  instances: 3
+  bootstrap:
+    initdb:
+      database: pagerune
+      owner: pagerune
+  storage:
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+# Configure storageClass, backups, recovery objectives and TLS for your environment.

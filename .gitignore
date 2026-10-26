@@ -1,0 +1,9 @@
+/target/
+/.devbox/
+/.direnv/
+.env
+.env.*
+!.env.example
+.envrc.local
+*.log
+.DS_Store
