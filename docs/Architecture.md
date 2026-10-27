@@ -68,8 +68,12 @@ hours; after the configured attempt limit the row is terminal.
 SMTP delivery is at-least-once. If SMTP accepts a message and the process crashes before
 PostgreSQL records success, a recovered row can send again. A stable Message-ID aids
 correlation but does not provide exactly-once semantics. Deleting a subscription cascades
-to queued notifications; an SMTP-accepted message cannot be recalled. Messages link only
-to the monitored URL until PageRune frontend links exist.
+to queued notifications. Delivery workers take a PostgreSQL session advisory lock keyed by
+subscription before checking active status and hold it through the bounded SMTP attempt.
+Every unsubscribe path takes the matching transaction advisory lock before deletion; it
+waits for an in-flight attempt and, after unsubscribe commits, no worker can pass the active
+check. Messages already accepted by SMTP cannot be recalled. Messages link only to the
+monitored URL until PageRune frontend links exist.
 
 ## Daily cycle and digest (planned)
 1. Any replica may create the scheduled cycle; a unique key prevents duplicates.

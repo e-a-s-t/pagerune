@@ -343,19 +343,27 @@ pub async fn delete_subscription(
     Query(query): Query<IdentityQuery>,
 ) -> Result<StatusCode, ApiError> {
     validate_identity(&query.subscriber_identity)?;
+    let mut tx = state.database.begin().await.map_err(|_| db_error())?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 7349871))")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| db_error())?;
     let result = sqlx::query("DELETE FROM subscriptions WHERE id=$1 AND subscriber_identity=$2")
         .bind(id)
         .bind(query.subscriber_identity)
-        .execute(&state.database)
+        .execute(&mut *tx)
         .await
         .map_err(|_| db_error())?;
     if result.rows_affected() == 0 {
+        let _ = tx.rollback().await;
         return Err(ApiError(
             StatusCode::NOT_FOUND,
             "not_found",
             "Subscription not found",
         ));
     }
+    tx.commit().await.map_err(|_| db_error())?;
     Ok(StatusCode::NO_CONTENT)
 }
 

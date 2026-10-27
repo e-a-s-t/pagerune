@@ -5,13 +5,13 @@
   <p class="eyebrow">Website updates</p>
   <h1>Follow this website</h1>
   <p class="site-url">{{ site_url }}</p>
-  <p>PageRune checks about every {{ interval_hours }} hours and emails you when this page changes.</p>
+  <p>PageRune checks {{ interval_text|lower }} and emails you when this page changes.</p>
   {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
   <form method="post" action="/subscribe/{{ site_id }}">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <label for="email">Email address</label>
     <input id="email" name="email" type="email" autocomplete="email" maxlength="320" required>
-    {% if test_mode %}<input type="hidden" name="cf-turnstile-response" value="dev-human-ok">{% else %}<div class="cf-turnstile" data-sitekey="{{ site_key }}" data-action="subscribe"></div>{% endif %}
+    {% if test_mode %}<input type="hidden" name="cf-turnstile-response" value="dev-human-ok">{% else %}<div class="cf-turnstile" data-sitekey="{{ site_key }}" data-action="subscribe" data-appearance="always"></div>{% endif %}
     <button class="button" type="submit">Send verification email</button>
     <p class="form-note">We’ll only activate this subscription after you confirm your email.</p>
   </form>

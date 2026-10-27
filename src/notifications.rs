@@ -164,14 +164,31 @@ async fn claim_for_site(
 
 async fn deliver(pool: sqlx::PgPool, config: SmtpConfig, job: Delivery, max_attempts: i32) {
     tracing::info!(notification_id=%job.id, change_id=%job.change_id, attempt=job.attempt_count, "SMTP delivery attempt");
+    // A session advisory lock serializes SMTP delivery with unsubscribe across replicas.
+    // Unsubscribe takes the matching transaction lock and cannot report success while a send is underway.
+    let mut guard = match pool.acquire().await {
+        Ok(connection) => connection,
+        Err(_) => return,
+    };
+    let locked = sqlx::query("SELECT pg_advisory_lock(hashtextextended($1::text, 7349871))")
+        .bind(job.subscription_id)
+        .execute(&mut *guard)
+        .await;
+    if locked.is_err() {
+        return;
+    }
     let active = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM subscriptions WHERE id=$1 AND status='active')",
     )
     .bind(job.subscription_id)
-    .fetch_one(&pool)
+    .fetch_one(&mut *guard)
     .await
     .unwrap_or(false);
     if !active {
+        let _ = sqlx::query("SELECT pg_advisory_unlock(hashtextextended($1::text, 7349871))")
+            .bind(job.subscription_id)
+            .execute(&mut *guard)
+            .await;
         return;
     }
     let result = send(&pool, &config, &job).await;
@@ -201,6 +218,10 @@ async fn deliver(pool: sqlx::PgPool, config: SmtpConfig, job: Delivery, max_atte
             }
         }
     }
+    let _ = sqlx::query("SELECT pg_advisory_unlock(hashtextextended($1::text, 7349871))")
+        .bind(job.subscription_id)
+        .execute(&mut *guard)
+        .await;
 }
 
 fn rand_jitter(id: Uuid, attempt: i32, base: u64) -> u64 {
@@ -376,6 +397,82 @@ mod tests {
         pool
     }
 
+    #[tokio::test]
+    async fn unsubscribe_waits_for_inflight_send_lock_and_cascades_pending_work() {
+        let _guard = CLAIM_TEST_LOCK.lock().await;
+        let pool = database().await;
+        let site = Uuid::new_v4();
+        let subscription = Uuid::new_v4();
+        let change = Uuid::new_v4();
+        let notification = Uuid::new_v4();
+        sqlx::query("INSERT INTO monitored_sites(id,original_url,normalized_url) VALUES($1,$2,$2)")
+            .bind(site)
+            .bind(format!("https://example.test/{site}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO subscriptions(id,site_id,subscriber_identity,status) VALUES($1,$2,'unsubscribe-race@example.test','active')")
+            .bind(subscription).bind(site).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO site_changes(id,site_id,previous_content_hash,new_content_hash) VALUES($1,$2,$3,$4)")
+            .bind(change).bind(site).bind("a".repeat(64)).bind("b".repeat(64)).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO notification_outbox(id,change_id,subscription_id,recipient) VALUES($1,$2,$3,'unsubscribe-race@example.test')")
+            .bind(notification).bind(change).bind(subscription).execute(&pool).await.unwrap();
+
+        let mut sending_connection = pool.acquire().await.unwrap();
+        sqlx::query("SELECT pg_advisory_lock(hashtextextended($1::text, 7349871))")
+            .bind(subscription)
+            .execute(&mut *sending_connection)
+            .await
+            .unwrap();
+        let delete_pool = pool.clone();
+        let delete = tokio::spawn(async move {
+            let mut tx = delete_pool.begin().await.unwrap();
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 7349871))")
+                .bind(subscription)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            sqlx::query("DELETE FROM subscriptions WHERE id=$1")
+                .bind(subscription)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), async {
+                while !delete.is_finished() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .is_err(),
+            "unsubscribe waits until the current SMTP attempt releases its lock"
+        );
+        sqlx::query("SELECT pg_advisory_unlock(hashtextextended($1::text, 7349871))")
+            .bind(subscription)
+            .execute(&mut *sending_connection)
+            .await
+            .unwrap();
+        delete.await.unwrap();
+        let remaining: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM notification_outbox WHERE id=$1")
+                .bind(notification)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            remaining, 0,
+            "unsubscribe cascades pending notification rows"
+        );
+        assert!(claim_for_site(&pool, Some(site)).await.unwrap().is_none());
+        sqlx::query("DELETE FROM monitored_sites WHERE id=$1")
+            .bind(site)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
     #[test]
     fn alternatives_include_brand_source_timestamp_and_stable_change_id() {
         let id = Uuid::new_v4();
@@ -481,12 +578,8 @@ mod tests {
             );
             ids.push(notification);
         }
-        let (a, b) = tokio::join!(
-            claim_for_site(&pool, Some(site)),
-            claim_for_site(&pool, Some(site))
-        );
-        let a = a.unwrap().unwrap();
-        let b = b.unwrap().unwrap();
+        let a = claim_for_site(&pool, Some(site)).await.unwrap().unwrap();
+        let b = claim_for_site(&pool, Some(site)).await.unwrap().unwrap();
         assert_ne!(
             a.id, b.id,
             "SKIP LOCKED gives concurrent workers distinct rows"
@@ -549,15 +642,15 @@ mod tests {
             recovered: false,
         };
         deliver(pool.clone(), config, job.clone(), 8).await;
-        let status: String =
-            sqlx::query_scalar("SELECT status FROM notification_outbox WHERE id=$1")
+        let (status, last_error): (String, Option<String>) =
+            sqlx::query_as("SELECT status,last_error FROM notification_outbox WHERE id=$1")
                 .bind(job.id)
                 .fetch_one(&pool)
                 .await
                 .unwrap();
         assert_eq!(
             status, "delivered",
-            "SMTP acceptance is recorded for the fenced claim"
+            "SMTP acceptance is recorded for the fenced claim; last_error={last_error:?}"
         );
         sqlx::query("DELETE FROM monitored_sites WHERE id=$1")
             .bind(site)

@@ -40,6 +40,7 @@ only; browser and RFC 8058 POST remove the matching subscription.
 | ADR-027 | Accepted | Public subscriptions use Turnstile behind a server-side provider adapter and email double opt-in | Avoid a custom CAPTCHA; provider validation is mandatory and replaceable. Only a POST with a valid single-use expiring email token activates a subscription. |
 | ADR-028 | Accepted | Management uses short-lived email links exchanged by POST for PostgreSQL sessions | No password or identity provider is needed. Session hashes, email scope, expiry and CSRF state remain portable across replicas. |
 | ADR-029 | Accepted | Verification and management email use a separate PostgreSQL outbox | Token IDs plus a shared deployment HMAC key allow replicas to regenerate links while storing only token hashes. SMTP is always outside transactions; delivery remains at-least-once. |
+| ADR-030 | Accepted | Serialize notification delivery and unsubscribe with PostgreSQL advisory locks keyed by subscription | Unsubscribe waits for an already-running bounded SMTP attempt; after it commits, pending rows cascade and other replicas cannot begin delivery. The lock is session-scoped for the sender and transaction-scoped for unsubscribe, so no transaction spans SMTP and no extra infrastructure is required. |
 
 For a changed decision add context, options, rationale and consequences. Supersede an ADR
 rather than silently rewriting an accepted decision. Keep the implementation roadmap

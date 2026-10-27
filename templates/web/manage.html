@@ -10,7 +10,7 @@
     <ul class="subscription-list">
     {% for item in subscriptions %}
       <li>
-        <div><a href="{{ item.site_url }}">{{ item.site_url }}</a><small>Checks every {{ item.interval_hours }} hours</small></div>
+        <div><a href="{{ item.site_url }}">{{ item.site_url }}</a><small>{{ item.interval_text }}</small></div>
         <form method="post" action="/manage/unsubscribe/{{ item.id }}">
           <input type="hidden" name="csrf" value="{{ csrf }}">
           <button class="button button-small button-quiet" type="submit">Unsubscribe</button>
@@ -28,7 +28,7 @@
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <label for="email">Email address</label>
     <input id="email" name="email" type="email" autocomplete="email" maxlength="320" required>
-    {% if test_mode %}<input type="hidden" name="cf-turnstile-response" value="dev-human-ok">{% else %}<div class="cf-turnstile" data-sitekey="{{ site_key }}" data-action="manage"></div>{% endif %}
+    {% if test_mode %}<input type="hidden" name="cf-turnstile-response" value="dev-human-ok">{% else %}<div class="cf-turnstile" data-sitekey="{{ site_key }}" data-action="manage" data-appearance="always"></div>{% endif %}
     <button class="button" type="submit">Email me a management link</button>
   </form>
   {% if not test_mode %}<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>{% endif %}

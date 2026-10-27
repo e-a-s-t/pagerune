@@ -23,7 +23,7 @@
       "fmt":           "cargo fmt",
       "fmt-check":     "cargo fmt --check",
       "lint":          "cargo clippy --all-targets --all-features -- -D warnings",
-      "check":         "set -e; cargo fmt --check; cargo clippy --all-targets --all-features -- -D warnings; cargo test"
+      "check":         "set -e; cargo fmt --check; cargo clippy --all-targets --all-features -- -D warnings; cargo test -- --test-threads=1"
     }
   }
 }

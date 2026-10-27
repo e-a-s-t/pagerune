@@ -41,6 +41,7 @@ one daily combined message if any selected pages changed.
 - Replicas claim deliveries using PostgreSQL `SKIP LOCKED`, expiring leases and fencing generations. SMTP work occurs outside transactions.
 - Delivery is at-least-once: SMTP acceptance followed by a crash before recording success can produce a duplicate. Exactly-once delivery is not guaranteed.
 - Subscription deletion cascades to queued outbox rows, suppressing pending notifications. A message already accepted by SMTP cannot be recalled.
+- Delivery checks subscription status under PostgreSQL coordination immediately before SMTP. Unsubscribe waits for any already-started bounded send to finish; after it succeeds no queued or concurrent worker may begin another delivery.
 - Email contains PageRune branding, source URL, detection time and stable change ID; it includes no snapshots or raw page content.
 - Notification email has customizable bundled HTML and plain-text templates. Each message has a cryptographically random unsubscribe token; PostgreSQL stores only SHA-256 token hashes. Tokens remain valid until subscription deletion. GET displays confirmation while POST removes only the associated subscription; RFC 8058 one-click POST is supported.
 

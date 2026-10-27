@@ -205,8 +205,18 @@ pub fn app(state: AppState) -> Router {
 async fn unsubscribe(pool: &PgPool, token: &str) -> Response {
     use sha2::Digest;
     let hash = hex::encode(sha2::Sha256::digest(token.as_bytes()));
-    let result = sqlx::query("DELETE FROM subscriptions WHERE id=(SELECT subscription_id FROM unsubscribe_tokens WHERE token_hash=$1 AND revoked_at IS NULL)")
-        .bind(hash).execute(pool).await;
+    let result = async {
+        let mut tx = pool.begin().await?;
+        let subscription_id = sqlx::query_scalar::<_, uuid::Uuid>("SELECT subscription_id FROM unsubscribe_tokens WHERE token_hash=$1 AND revoked_at IS NULL")
+            .bind(&hash).fetch_optional(&mut *tx).await?;
+        if let Some(subscription_id) = subscription_id {
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 7349871))")
+                .bind(subscription_id).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM subscriptions WHERE id=$1")
+                .bind(subscription_id).execute(&mut *tx).await?;
+        }
+        tx.commit().await
+    }.await;
     let mut response = match result {
         Ok(_) => axum::response::Html("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Unsubscribed</title><h1>Notifications disabled</h1><p>This subscription will no longer receive notifications.</p></html>").into_response(),
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Request could not be completed").into_response(),

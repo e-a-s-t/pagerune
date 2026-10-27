@@ -107,7 +107,7 @@ pub struct UnsubscribeForm {
 struct ManagedSubscription {
     id: Uuid,
     site_url: String,
-    interval_hours: i32,
+    interval_text: String,
     created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -148,6 +148,24 @@ fn fresh_token() -> String {
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     hex::encode(bytes)
+}
+
+pub fn format_interval(seconds: i32) -> String {
+    let seconds = seconds.max(1);
+    let (value, unit) = if seconds % 86_400 == 0 {
+        (seconds / 86_400, "day")
+    } else if seconds % 3_600 == 0 {
+        (seconds / 3_600, "hour")
+    } else if seconds % 60 == 0 {
+        (seconds / 60, "minute")
+    } else {
+        return format!("Every {seconds} seconds");
+    };
+    if value == 1 {
+        format!("Every {unit}")
+    } else {
+        format!("Every {value} {unit}s")
+    }
 }
 
 fn derived_token(key: &[u8; 32], purpose: &str, id: Uuid) -> String {
@@ -246,7 +264,7 @@ async fn subscribe_form(state: &AppState, site_id: Uuid, error: Option<&str>) ->
     };
     page(
         "subscribe.html",
-        context! { site_url => url, interval_hours => format!("{:.0}", interval as f64 / 3600.0), site_id => site_id.to_string(), csrf => csrf, site_key => state.human_verifier.site_key(), test_mode => state.human_verifier.is_development(), error => error.unwrap_or("") },
+        context! { site_url => url, interval_text => format_interval(interval), site_id => site_id.to_string(), csrf => csrf, site_key => state.human_verifier.site_key(), test_mode => state.human_verifier.is_development(), error => error.unwrap_or("") },
     )
 }
 
@@ -427,8 +445,17 @@ pub async fn manage(State(state): State<AppState>, headers: HeaderMap) -> Respon
     if let Some(cookie) = cookie_value(&headers, "pagerune_session")
         && let Some((email, csrf)) = session(&state.database, &cookie).await
     {
-        let rows = sqlx::query_as::<_, ManagedSubscription>("SELECT s.id,m.original_url AS site_url,ceil(m.interval_seconds/3600.0)::int AS interval_hours,s.created_at FROM subscriptions s JOIN monitored_sites m ON m.id=s.site_id WHERE s.subscriber_identity=$1 AND s.status='active' ORDER BY s.created_at DESC")
+        let rows = sqlx::query_as::<_, (Uuid, String, i32, chrono::DateTime<chrono::Utc>)>("SELECT s.id,m.original_url AS site_url,m.interval_seconds,s.created_at FROM subscriptions s JOIN monitored_sites m ON m.id=s.site_id WHERE s.subscriber_identity=$1 AND s.status='active' ORDER BY s.created_at DESC")
             .bind(&email).fetch_all(&state.database).await.unwrap_or_default();
+        let rows: Vec<ManagedSubscription> = rows
+            .into_iter()
+            .map(|(id, site_url, seconds, created_at)| ManagedSubscription {
+                id,
+                site_url,
+                interval_text: format_interval(seconds),
+                created_at,
+            })
+            .collect();
         return page(
             "manage.html",
             context! {authenticated => true, email => email, csrf => csrf, subscriptions => rows},
@@ -578,8 +605,14 @@ pub async fn management_unsubscribe(
     if input.csrf != csrf {
         return (StatusCode::FORBIDDEN, "Form validation failed").into_response();
     }
-    let result = sqlx::query("DELETE FROM subscriptions WHERE id=$1 AND lower(btrim(subscriber_identity))=$2 AND status='active'")
-        .bind(id).bind(identity).execute(&state.database).await;
+    let result = async {
+        let mut tx = state.database.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 7349871))")
+            .bind(id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM subscriptions WHERE id=$1 AND lower(btrim(subscriber_identity))=$2 AND status='active'")
+            .bind(id).bind(identity).execute(&mut *tx).await?;
+        tx.commit().await
+    }.await;
     if result.is_err() {
         return generic_error();
     }
@@ -649,10 +682,17 @@ async fn validate_turnstile(secret: &str, token: &str, action: &str, hostname: &
     else {
         return false;
     };
+    if !response.status().is_success() {
+        return false;
+    }
     let Ok(bytes) = response.bytes().await else {
         return false;
     };
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+    valid_turnstile_response(&bytes, action, hostname)
+}
+
+fn valid_turnstile_response(bytes: &[u8], action: &str, hostname: &str) -> bool {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
         return false;
     };
     value["success"] == true
@@ -920,6 +960,44 @@ mod tests {
             .await
             .clone()
     }
+    #[test]
+    fn formats_monitoring_intervals_without_rounding_or_bad_grammar() {
+        for (seconds, expected) in [
+            (60, "Every minute"),
+            (300, "Every 5 minutes"),
+            (900, "Every 15 minutes"),
+            (3600, "Every hour"),
+            (7200, "Every 2 hours"),
+            (86400, "Every day"),
+        ] {
+            assert_eq!(format_interval(seconds), expected);
+        }
+        assert_eq!(format_interval(61), "Every 61 seconds");
+    }
+
+    #[test]
+    fn turnstile_response_requires_success_matching_action_and_hostname() {
+        assert!(valid_turnstile_response(
+            br#"{"success":true,"action":"subscribe","hostname":"pagerune.example"}"#,
+            "subscribe",
+            "pagerune.example"
+        ));
+        for response in [
+            br#"{"success":false,"error-codes":["invalid-input-response"]}"#.as_slice(),
+            br#"{"success":false,"error-codes":["timeout-or-duplicate"]}"#,
+            br#"{"success":false,"error-codes":["internal-error"]}"#,
+            br#"{"success":true,"action":"manage","hostname":"pagerune.example"}"#,
+            br#"{"success":true,"action":"subscribe","hostname":"attacker.example"}"#,
+            b"unavailable",
+        ] {
+            assert!(!valid_turnstile_response(
+                response,
+                "subscribe",
+                "pagerune.example"
+            ));
+        }
+    }
+
     #[test]
     fn generated_tokens_are_scoped_and_not_their_database_ids() {
         let key = [7u8; 32];

@@ -33,6 +33,19 @@ is capped at five connections per replica; size total connections against CNPG c
 | PAGERUNE_TURNSTILE_SECRET | Server-side Turnstile validation secret | Required unless loopback test mode |
 | PAGERUNE_TURNSTILE_TEST_MODE | Enable fixed local test token; requires the loopback development API | false |
 
+The subscription and management forms render the Turnstile widget with its appearance set
+to `always` when test mode is off. Configure the Cloudflare widget in Managed mode
+(recommended) or Non-Interactive mode; Invisible mode suppresses the visible widget and is
+not appropriate for these forms. The Cloudflare widget mode is selected in its dashboard
+configuration, while the page sets the appearance. Turnstile site keys are public and
+rendered into the page; the secret remains server-side. Every POST validates the token with Turnstile and checks its
+success, action and hostname. Invalid, expired, replayed, malformed, timed-out or
+unavailable provider responses are rejected. Production must provide both Turnstile keys;
+startup fails if either is missing. For local development only, set
+`PAGERUNE_DEV_API_ENABLED=true` on a loopback bind and
+`PAGERUNE_TURNSTILE_TEST_MODE=true`; the page then submits the explicit fixed test token
+and no external challenge is used. Do not use test mode in production.
+
 Verification links expire after 24 hours, management links after 15 minutes, and
 management sessions after 30 minutes. Public form request limits are PostgreSQL-backed:
 10 requests per IP/hour and 3 per normalized email/hour. Keep `PAGERUNE_TOKEN_KEY`
