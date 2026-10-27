@@ -25,7 +25,7 @@ devbox install
 direnv allow
 ```
 
-`.env` is ignored by Git. `.envrc` loads `.env` and then `.env.example` through direnv; keep development application variables in these direnv-managed files (or ignored `.envrc.local` overrides), not in Devbox configuration or application dotenv code. If your shell hook is active, entering the directory loads the environment. `direnv exec . <command>` explicitly runs a command with it loaded.
+`.env` is ignored by Git. `.envrc` loads `.env.example` defaults and then `.env` overrides through direnv; keep development application variables in these direnv-managed files (or ignored `.envrc.local` overrides), not in Devbox configuration or application dotenv code. If your shell hook is active, entering the directory loads the environment. `direnv exec . <command>` explicitly runs the command with it loaded.
 
 ## Start local services
 
@@ -45,7 +45,9 @@ Apply the versioned SQLx migrations before starting the application:
 direnv exec . devbox run migrate
 ```
 
-Migrations create the monitoring and notification outbox tables. Run this command again after pulling new migrations.
+Migrations create the monitoring, notification and public subscription tables. The phase 4
+local setup uses a clean development database; no migration re-verifies legacy subscribers.
+Run this command again after pulling new migrations.
 
 ## Run PageRune and checks
 
@@ -110,11 +112,13 @@ direnv exec . docker compose down -v
 ## Implemented and planned functionality
 
 The application provides the Axum API, PostgreSQL persistence, generated OpenAPI/Swagger,
-health/readiness, monitored URL and subscription APIs, asynchronous site checks, hash-based
-change history, SSRF restrictions, and PostgreSQL leases with fencing. Migrations are
-applied explicitly. The business API is disabled unless `PAGERUNE_DEV_API_ENABLED=true`;
-that option requires the default loopback bind and is only for local development.
+health/readiness, per-site public subscription pages, double opt-in, management sessions,
+asynchronous site checks, hash-based change history, SSRF restrictions, and PostgreSQL
+leases with fencing. Site registration and other business API routes remain disabled unless
+`PAGERUNE_DEV_API_ENABLED=true`; this requires a loopback bind and is only for local/private
+owner access.
 
-OIDC, tenant membership, subscriber verification, HTML UI, daily digest, and public change
-pages remain unimplemented. Email delivery uses PostgreSQL outbox rows; Mailpit is the
-local SMTP capture service.
+OIDC, tenant membership, owner UI, daily digest, and public change pages remain
+unimplemented. Public email is double-opt-in. The example environment enables a fixed
+human-verification test response only on loopback; production must configure Turnstile keys
+and disable test mode. Mailpit captures verification, management, and notification email.

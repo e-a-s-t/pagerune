@@ -11,6 +11,10 @@ endpoint operated by the deployer; no SaaS is required.
   current hash/ETag/Last-Modified, last check/success timestamps and current status.
 - Subscription: monitored site + opaque subscriber identity. The identity is a development
   association only; it is not proof of ownership or authorization.
+- Phase 4 site enrollment flag: `public_subscriptions_enabled BOOLEAN NOT NULL DEFAULT FALSE`.
+- Phase 4 subscription state: `pending` or `active`; only active rows participate in notification creation and delivery. Normalized email/site uniqueness prevents duplicate enrollments.
+- Verification and management token tables store SHA-256 token hashes, purpose IDs and database expiry/consumption/revocation timestamps. Management sessions store a hash of the HttpOnly session cookie, verified email identity, CSRF token digest and expiry.
+- Form nonces, hourly rate-limit buckets and verification/management email outbox jobs are PostgreSQL-backed. Outbox rows carry a random token ID, not a recoverable token; replicas derive the token with a shared configured HMAC key. SMTP work occurs outside database transactions.
 - Site change: stable UUID, detected time and previous/new SHA-256 hashes. No body snapshot
   or public change page is stored or exposed in this phase.
 - Lease: owner UUID, expiry and monotonically increasing fencing generation stored on the
@@ -90,10 +94,23 @@ SMTP has an ambiguous success window: accepted mail followed by a database write
 may be resent. Stable Message-ID helps tracing but does not guarantee deduplication.
 
 ## Frontend and APIs
-Minimal server-rendered templates, progressive enhancement only for small interactions
-such as copy-link buttons. Admin uses OIDC sessions persisted in PostgreSQL. CSRF-protected
-HTML forms delegate to the same application services as documented JSON APIs. No React,
-Node build pipeline, or separate frontend deployment is needed.
+Public pages use Axum, MiniJinja and local CSS. `/subscribe/{site_id}` only enrolls visitors
+to an existing site whose public enrollment flag is enabled; it never registers or fetches
+the submitted website URL. The monitoring interval comes from the registered site. Browser
+forms use one-use PostgreSQL CSRF nonces. The site-registration JSON API remains disabled
+by default and loopback-only, with private/operator-mediated owner access. OIDC and admin
+sessions are out of scope for this phase. No React, Node build pipeline, or separate
+frontend deployment is introduced.
+
+Cloudflare Turnstile is called through a replaceable server-side human-verification
+adapter. The server verifies provider success, expected action and configured public host;
+failure or timeout rejects enrollment. Test bypass is permitted only with the loopback
+development API enabled.
+
+Management requests return the same response for every address. A management email token
+is exchanged only through POST, consuming it and creating a new PostgreSQL session. Session
+reads and unsubscribe writes are scoped by normalized verified email; writes require a
+session-bound CSRF value. Session and token expiration is checked against database time.
 
 ## Storage and retention
 Only one current normalized body/hash per watch. Cycle metadata and immutable digest

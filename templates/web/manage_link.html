@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Open management link — PageRune{% endblock %}
+{% block content %}
+<section class="message-card">
+  <p class="eyebrow">Private management link</p>
+  <h1>Open your subscriptions</h1>
+  <p>Continue to create a short-lived, private management session on this device.</p>
+  <form method="post" action="/manage/{{ token }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="button" type="submit">Continue to subscriptions</button>
+  </form>
+</section>
+{% endblock %}

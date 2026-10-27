@@ -22,16 +22,17 @@ Create per-subscription PostgreSQL outbox rows atomically with detected changes.
 through configurable SMTP with HTML/text alternatives, bounded worker concurrency,
 expiring fenced leases, retries, and Mailpit development support. Delivery is at-least-once.
 
-## Phase 4 — persistence and identity
-Add tenants, memberships, contacts, verification tokens and site ownership proof. Implement
-OIDC SSO, portable sessions, OAuth2 access-token validation and membership enforcement.
-Move site/watch APIs behind authenticated tenant boundaries; remove the development-only
-API gate only after the authenticated replacement is complete and tested.
+## Phase 4 — public self-service subscriptions (implemented)
+Site registration returns a permanent public subscription URL. Owners explicitly enable
+public subscriptions per site; enrollment defaults off and cannot register arbitrary URLs.
+Visitors pass server-validated Turnstile and email double opt-in before activation. Add
+PostgreSQL-backed verification/management email jobs, expiring hashed tokens, CSRF-protected
+email management sessions, unsubscribe, rate limits and server-rendered templates. No OIDC
+or subscriber accounts are introduced.
 
-## Phase 5 — minimal frontend and subscription workflow
-Server-rendered admin with watch status/copy links. Public general/preselected form,
-double opt-in, safe token management, unsubscribe, CSRF and rate limits. Reuse the existing
-SMTP adapter for verification and preference emails. No production auth bypass.
+## Later — authenticated owner interface
+Add tenant membership and OIDC SSO only when owner dashboard/API requirements are selected.
+Keep the existing private development API gate until a secure replacement is designed.
 
 ## Phase 6 — daily digest
 Normalize public static HTML (text + hrefs), implement durable daily cycles, cutoff/sealing,

@@ -15,14 +15,24 @@ delivery when an unsubscribe completes may still be accepted and cannot be recal
 `PAGERUNE_PUBLIC_BASE_URL` to the externally reachable HTTPS origin. Token hashes cascade
 with subscription deletion.
 
+## Public subscriptions
+Enable enrollment per site only after registration, by setting
+`public_subscriptions_enabled=true` through private owner API access. Keep the development
+API disabled on public ingress. Configure Turnstile site/secret keys and a shared 64-hex
+`PAGERUNE_TOKEN_KEY` in the deployment secret; every replica must use the same key. Never
+enable `PAGERUNE_TURNSTILE_TEST_MODE` outside a loopback development instance. Verification
+and management outbox jobs use PostgreSQL leases and token hashes. Monitor their pending,
+delivered and failed counts without logging recipient addresses or token URLs. A shared
+cleanup task removes expired tokens, sessions, form nonces and rate buckets.
+
 A transaction-pool proxy needs careful review if advisory locks are ever used; this
 architecture instead uses persisted job leases and row locking in short transactions.
 Account for pool connections per replica and graceful termination when autoscaling.
 
 ## Secrets and settings
 ConfigMap for non-sensitive settings; Secret/injection for DATABASE_URL, SMTP credentials,
-OIDC secret. Do not use command-line secrets. Validate TLS to the database and mail server.
-Configure public base URL and OIDC redirect using externally visible HTTPS addresses.
+Turnstile secret and token key. Do not use command-line secrets. Validate TLS to the database
+and mail server. Configure public base URL using the externally visible HTTPS origin.
 
 ## Lifecycle
 Migrations run once as an explicit deployment Job before rollout, with compatible
@@ -50,6 +60,6 @@ Configure CNPG backups and test restoration; determine recovery objectives and r
 with the operator. A replica count alone does not constitute a tested HA/backup strategy.
 
 ## Before first rollout
-Generate/review tool lockfiles, run all checks, implement auth and business flows,
-configure tenant setup/site verification, choose retention/license, provision image and
+Generate/review tool lockfiles, run all checks, configure tenant setup/site verification,
+choose retention/license, provision image and
 TLS/secrets, run tenant-isolation and multi-replica recovery tests, then test backup restore.

@@ -36,6 +36,10 @@ only; browser and RFC 8058 POST remove the matching subscription.
 | ADR-023 | Accepted | Configurable per-site intervals with 24-hour default and five-minute minimum | Supports core interval configuration while retaining the existing daily cadence as the default. |
 | ADR-024 | Accepted | Change history stores stable identifiers and hash metadata only | Supports future permanent change URLs without storing page snapshots or publishing public diff pages. |
 | ADR-025 | Accepted | Email notifications use a PostgreSQL transactional outbox | Change event and per-subscription deliveries commit atomically; replicas claim with `SKIP LOCKED`, expiring leases and fencing. SMTP occurs outside transactions. Delivery is at-least-once because SMTP acceptance may precede a crash before success is recorded. |
+| ADR-026 | Accepted | Public site enrollment is explicitly enabled per site and defaults off | A stable UUID URL can be placed on the site owner’s website without allowing visitors to register arbitrary targets. Existing site registration stays on the private development API. |
+| ADR-027 | Accepted | Public subscriptions use Turnstile behind a server-side provider adapter and email double opt-in | Avoid a custom CAPTCHA; provider validation is mandatory and replaceable. Only a POST with a valid single-use expiring email token activates a subscription. |
+| ADR-028 | Accepted | Management uses short-lived email links exchanged by POST for PostgreSQL sessions | No password or identity provider is needed. Session hashes, email scope, expiry and CSRF state remain portable across replicas. |
+| ADR-029 | Accepted | Verification and management email use a separate PostgreSQL outbox | Token IDs plus a shared deployment HMAC key allow replicas to regenerate links while storing only token hashes. SMTP is always outside transactions; delivery remains at-least-once. |
 
 For a changed decision add context, options, rationale and consequences. Supersede an ADR
 rather than silently rewriting an accepted decision. Keep the implementation roadmap

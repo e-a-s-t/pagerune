@@ -83,7 +83,7 @@ async fn apply_result(
                     let change_id = Uuid::new_v4();
                     sqlx::query("INSERT INTO site_changes (id, site_id, previous_content_hash, new_content_hash) VALUES ($1,$2,$3,$4)")
                         .bind(change_id).bind(job.id).bind(previous).bind(new_hash).execute(&mut *tx).await?;
-                    let created = sqlx::query("INSERT INTO notification_outbox (id, change_id, subscription_id, recipient) SELECT gen_random_uuid(), $1, s.id, s.subscriber_identity FROM subscriptions s WHERE s.site_id=$2 ON CONFLICT (change_id, subscription_id) DO NOTHING")
+                    let created = sqlx::query("INSERT INTO notification_outbox (id, change_id, subscription_id, recipient) SELECT gen_random_uuid(), $1, s.id, s.subscriber_identity FROM subscriptions s WHERE s.site_id=$2 AND s.status='active' ON CONFLICT (change_id, subscription_id) DO NOTHING")
                         .bind(change_id).bind(job.id).execute(&mut *tx).await?.rows_affected();
                     tracing::info!(change_id = %change_id, site_id = %job.id, notification_count = created, "change and notifications created");
                 }
@@ -169,7 +169,7 @@ mod tests {
             .zip(["alice@example.test", "bob@example.test"])
         {
             sqlx::query(
-                "INSERT INTO subscriptions (id,site_id,subscriber_identity) VALUES ($1,$2,$3)",
+                "INSERT INTO subscriptions (id,site_id,subscriber_identity,status) VALUES ($1,$2,$3,'active')",
             )
             .bind(id)
             .bind(site_id)
@@ -182,6 +182,8 @@ mod tests {
             database: pool.clone(),
             dev_api_enabled: false,
             public_base_url: "http://localhost:8080".into(),
+            token_key: [9; 32],
+            human_verifier: std::sync::Arc::new(crate::web::DevelopmentTestVerifier),
         };
 
         let (left, right) = tokio::join!(claim(&pool), claim(&pool));
@@ -336,7 +338,7 @@ mod tests {
         .unwrap();
         assert_eq!(notifications, 2, "one notification per active subscriber");
         let late_subscription = Uuid::new_v4();
-        sqlx::query("INSERT INTO subscriptions (id,site_id,subscriber_identity) VALUES ($1,$2,'late@example.test')")
+        sqlx::query("INSERT INTO subscriptions (id,site_id,subscriber_identity,status) VALUES ($1,$2,'late@example.test','active')")
             .bind(late_subscription).bind(site_id).execute(&pool).await.unwrap();
         let historical: i64 =
             sqlx::query_scalar("SELECT count(*) FROM notification_outbox WHERE subscription_id=$1")

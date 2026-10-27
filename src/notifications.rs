@@ -158,18 +158,19 @@ async fn claim_for_site(
     site_id: Option<Uuid>,
 ) -> Result<Option<Delivery>, sqlx::Error> {
     let owner = Uuid::new_v4();
-    sqlx::query_as::<_,Delivery>("WITH due AS (SELECT o.id, (o.status='sending') AS recovered FROM notification_outbox o JOIN subscriptions s ON s.id=o.subscription_id JOIN site_changes c ON c.id=o.change_id WHERE o.status IN ('pending','sending') AND o.next_attempt_at<=now() AND (o.lease_expires_at IS NULL OR o.lease_expires_at<=now()) AND ($2::uuid IS NULL OR c.site_id=$2) ORDER BY o.next_attempt_at,o.created_at FOR UPDATE OF o SKIP LOCKED LIMIT 1) UPDATE notification_outbox o SET status='sending', lease_owner=$1, lease_expires_at=now()+interval '180 seconds', lease_generation=o.lease_generation+1, attempt_count=o.attempt_count+1 FROM due d,site_changes c,monitored_sites m WHERE o.id=d.id AND c.id=o.change_id AND m.id=c.site_id RETURNING o.id,o.change_id,o.subscription_id,o.recipient,c.detected_at,m.original_url AS site_url,o.lease_owner,o.lease_generation,o.attempt_count,d.recovered")
+    sqlx::query_as::<_,Delivery>("WITH due AS (SELECT o.id, (o.status='sending') AS recovered FROM notification_outbox o JOIN subscriptions s ON s.id=o.subscription_id JOIN site_changes c ON c.id=o.change_id WHERE s.status='active' AND o.status IN ('pending','sending') AND o.next_attempt_at<=now() AND (o.lease_expires_at IS NULL OR o.lease_expires_at<=now()) AND ($2::uuid IS NULL OR c.site_id=$2) ORDER BY o.next_attempt_at,o.created_at FOR UPDATE OF o SKIP LOCKED LIMIT 1) UPDATE notification_outbox o SET status='sending', lease_owner=$1, lease_expires_at=now()+interval '180 seconds', lease_generation=o.lease_generation+1, attempt_count=o.attempt_count+1 FROM due d,site_changes c,monitored_sites m WHERE o.id=d.id AND c.id=o.change_id AND m.id=c.site_id RETURNING o.id,o.change_id,o.subscription_id,o.recipient,c.detected_at,m.original_url AS site_url,o.lease_owner,o.lease_generation,o.attempt_count,d.recovered")
         .bind(owner).bind(site_id).fetch_optional(pool).await
 }
 
 async fn deliver(pool: sqlx::PgPool, config: SmtpConfig, job: Delivery, max_attempts: i32) {
     tracing::info!(notification_id=%job.id, change_id=%job.change_id, attempt=job.attempt_count, "SMTP delivery attempt");
-    let active =
-        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM subscriptions WHERE id=$1)")
-            .bind(job.subscription_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap_or(false);
+    let active = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM subscriptions WHERE id=$1 AND status='active')",
+    )
+    .bind(job.subscription_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap_or(false);
     if !active {
         return;
     }
@@ -465,7 +466,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO subscriptions(id,site_id,subscriber_identity) VALUES($1,$2,'test@example.test')").bind(sub).bind(site).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO subscriptions(id,site_id,subscriber_identity,status) VALUES($1,$2,'test@example.test','active')").bind(sub).bind(site).execute(&pool).await.unwrap();
         let mut ids = Vec::new();
         for _ in 0..2 {
             let change = Uuid::new_v4();
@@ -527,7 +528,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO subscriptions(id,site_id,subscriber_identity) VALUES($1,$2,'pagerune-test@example.test')")
+        sqlx::query("INSERT INTO subscriptions(id,site_id,subscriber_identity,status) VALUES($1,$2,'pagerune-test@example.test','active')")
             .bind(subscription).bind(site).execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO site_changes(id,site_id,previous_content_hash,new_content_hash) VALUES($1,$2,$3,$4)")
             .bind(change).bind(site).bind("a".repeat(64)).bind("b".repeat(64)).execute(&pool).await.unwrap();
@@ -592,7 +593,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO subscriptions(id,site_id,subscriber_identity) VALUES($1,$2,'pagerune-test@example.test')").bind(job.subscription_id).bind(site).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO subscriptions(id,site_id,subscriber_identity,status) VALUES($1,$2,'pagerune-test@example.test','active')").bind(job.subscription_id).bind(site).execute(&pool).await.unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         config.port = listener.local_addr().unwrap().port();
         drop(listener);
@@ -608,7 +609,7 @@ mod tests {
         let site = Uuid::new_v4();
         let subscription = Uuid::new_v4();
         sqlx::query("INSERT INTO monitored_sites(id,original_url,normalized_url,next_check_at) VALUES($1,$2,$2,now()+interval '1 day')").bind(site).bind(format!("https://example.test/{site}")).execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO subscriptions(id,site_id,subscriber_identity) VALUES($1,$2,'retry@example.test')").bind(subscription).bind(site).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO subscriptions(id,site_id,subscriber_identity,status) VALUES($1,$2,'retry@example.test','active')").bind(subscription).bind(site).execute(&pool).await.unwrap();
         let mut config = SmtpConfig::default();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         config.port = listener.local_addr().unwrap().port();

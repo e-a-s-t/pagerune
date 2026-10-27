@@ -24,6 +24,9 @@ pub struct Site {
     pub last_error: Option<String>,
     pub next_check_at: chrono::DateTime<chrono::Utc>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub public_subscriptions_enabled: bool,
+    #[sqlx(skip)]
+    pub subscription_url: String,
 }
 
 #[derive(Serialize, ToSchema, FromRow)]
@@ -32,6 +35,7 @@ pub struct Subscription {
     pub site_id: Uuid,
     pub subscriber_identity: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub status: String,
 }
 
 #[derive(Serialize, ToSchema, FromRow)]
@@ -55,11 +59,14 @@ pub struct CreateSite {
     pub url: String,
     #[serde(default = "default_interval")]
     pub interval_seconds: i32,
+    #[serde(default)]
+    pub public_subscriptions_enabled: bool,
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct UpdateSite {
-    pub interval_seconds: i32,
+    pub interval_seconds: Option<i32>,
+    pub public_subscriptions_enabled: Option<bool>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -106,6 +113,9 @@ impl IntoResponse for ApiError {
 
 fn default_interval() -> i32 {
     86_400
+}
+fn set_subscription_url(site: &mut Site, base: &str) {
+    site.subscription_url = format!("{}/subscribe/{}", base.trim_end_matches('/'), site.id);
 }
 fn pagination(p: &Pagination) -> Result<(i64, i64, i64), ApiError> {
     let page = p.page.unwrap_or(1);
@@ -169,20 +179,21 @@ pub async fn create_site(
     let id = Uuid::new_v4();
     let mut tx = state.database.begin().await.map_err(|_| db_error())?;
     let inserted = sqlx::query_as::<_, Site>(
-        "INSERT INTO monitored_sites (id, original_url, normalized_url, interval_seconds) VALUES ($1,$2,$3,$4) ON CONFLICT (normalized_url) DO NOTHING RETURNING id, original_url, normalized_url, interval_seconds, current_content_hash, last_checked_at, last_successful_check_at, current_status, last_error, next_check_at, created_at",
+        "INSERT INTO monitored_sites (id, original_url, normalized_url, interval_seconds, public_subscriptions_enabled) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (normalized_url) DO NOTHING RETURNING id, original_url, normalized_url, interval_seconds, current_content_hash, last_checked_at, last_successful_check_at, current_status, last_error, next_check_at, created_at, public_subscriptions_enabled",
     )
     .bind(id)
     .bind(input.url)
     .bind(&normalized)
     .bind(input.interval_seconds)
+    .bind(input.public_subscriptions_enabled)
     .fetch_optional(&mut *tx)
     .await
     .map_err(|_| db_error())?;
-    let (status, site) = if let Some(site) = inserted {
+    let (status, mut site) = if let Some(site) = inserted {
         (StatusCode::CREATED, site)
     } else {
         let site = sqlx::query_as::<_, Site>(
-            "SELECT id, original_url, normalized_url, interval_seconds, current_content_hash, last_checked_at, last_successful_check_at, current_status, last_error, next_check_at, created_at FROM monitored_sites WHERE normalized_url=$1",
+            "SELECT id, original_url, normalized_url, interval_seconds, current_content_hash, last_checked_at, last_successful_check_at, current_status, last_error, next_check_at, created_at, public_subscriptions_enabled FROM monitored_sites WHERE normalized_url=$1",
         )
         .bind(normalized)
         .fetch_optional(&mut *tx)
@@ -192,6 +203,7 @@ pub async fn create_site(
         (StatusCode::OK, site)
     };
     tx.commit().await.map_err(|_| db_error())?;
+    set_subscription_url(&mut site, &state.public_base_url);
     Ok((status, Json(site)))
 }
 
@@ -201,8 +213,11 @@ pub async fn list_sites(
     Query(query): Query<Pagination>,
 ) -> Result<Json<Page<Site>>, ApiError> {
     let (page, limit, offset) = pagination(&query)?;
-    let items = sqlx::query_as::<_, Site>("SELECT id, original_url, normalized_url, interval_seconds, current_content_hash, last_checked_at, last_successful_check_at, current_status, last_error, next_check_at, created_at FROM monitored_sites ORDER BY created_at DESC, id LIMIT $1 OFFSET $2")
+    let mut items = sqlx::query_as::<_, Site>("SELECT id, original_url, normalized_url, interval_seconds, current_content_hash, last_checked_at, last_successful_check_at, current_status, last_error, next_check_at, created_at, public_subscriptions_enabled FROM monitored_sites ORDER BY created_at DESC, id LIMIT $1 OFFSET $2")
         .bind(limit).bind(offset).fetch_all(&state.database).await.map_err(|_| db_error())?;
+    for site in &mut items {
+        set_subscription_url(site, &state.public_base_url);
+    }
     Ok(Json(Page { items, page, limit }))
 }
 
@@ -211,8 +226,10 @@ pub async fn get_site(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Site>, ApiError> {
-    sqlx::query_as::<_, Site>("SELECT id, original_url, normalized_url, interval_seconds, current_content_hash, last_checked_at, last_successful_check_at, current_status, last_error, next_check_at, created_at FROM monitored_sites WHERE id=$1")
-        .bind(id).fetch_optional(&state.database).await.map_err(|_| db_error())?.map(Json).ok_or(ApiError(StatusCode::NOT_FOUND, "not_found", "Site not found"))
+    let mut site = sqlx::query_as::<_, Site>("SELECT id, original_url, normalized_url, interval_seconds, current_content_hash, last_checked_at, last_successful_check_at, current_status, last_error, next_check_at, created_at, public_subscriptions_enabled FROM monitored_sites WHERE id=$1")
+        .bind(id).fetch_optional(&state.database).await.map_err(|_| db_error())?.ok_or(ApiError(StatusCode::NOT_FOUND, "not_found", "Site not found"))?;
+    set_subscription_url(&mut site, &state.public_base_url);
+    Ok(Json(site))
 }
 
 #[utoipa::path(patch, path = "/api/v1/sites/{id}", tag = "Sites", request_body = UpdateSite, params(("id" = Uuid, Path)), responses((status = 200, body = Site), (status = 400, body = ApiErrorBody), (status = 404, body = ApiErrorBody), (status = 503, body = ApiErrorBody)))]
@@ -221,9 +238,20 @@ pub async fn update_site(
     Path(id): Path<Uuid>,
     Json(input): Json<UpdateSite>,
 ) -> Result<Json<Site>, ApiError> {
-    validate_interval(input.interval_seconds)?;
-    sqlx::query_as::<_, Site>("UPDATE monitored_sites SET interval_seconds=$2, next_check_at=LEAST(next_check_at, now()), updated_at=now() WHERE id=$1 RETURNING id, original_url, normalized_url, interval_seconds, current_content_hash, last_checked_at, last_successful_check_at, current_status, last_error, next_check_at, created_at")
-        .bind(id).bind(input.interval_seconds).fetch_optional(&state.database).await.map_err(|_| db_error())?.map(Json).ok_or(ApiError(StatusCode::NOT_FOUND, "not_found", "Site not found"))
+    if input.interval_seconds.is_none() && input.public_subscriptions_enabled.is_none() {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "empty_update",
+            "At least one site setting must be provided",
+        ));
+    }
+    if let Some(interval) = input.interval_seconds {
+        validate_interval(interval)?;
+    }
+    let mut site = sqlx::query_as::<_, Site>("UPDATE monitored_sites SET interval_seconds=COALESCE($2,interval_seconds), public_subscriptions_enabled=COALESCE($3,public_subscriptions_enabled), next_check_at=CASE WHEN $2 IS NULL THEN next_check_at ELSE LEAST(next_check_at,now()) END, updated_at=now() WHERE id=$1 RETURNING id, original_url, normalized_url, interval_seconds, current_content_hash, last_checked_at, last_successful_check_at, current_status, last_error, next_check_at, created_at, public_subscriptions_enabled")
+        .bind(id).bind(input.interval_seconds).bind(input.public_subscriptions_enabled).fetch_optional(&state.database).await.map_err(|_| db_error())?.ok_or(ApiError(StatusCode::NOT_FOUND, "not_found", "Site not found"))?;
+    set_subscription_url(&mut site, &state.public_base_url);
+    Ok(Json(site))
 }
 
 #[utoipa::path(delete, path = "/api/v1/sites/{id}", tag = "Sites", params(("id" = Uuid, Path)), responses((status = 204, description = "Site deleted"), (status = 404, body = ApiErrorBody), (status = 503, body = ApiErrorBody)))]
@@ -246,22 +274,35 @@ pub async fn delete_site(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[utoipa::path(post, path = "/api/v1/sites/{site_id}/subscriptions", tag = "Subscriptions", request_body = CreateSubscription, params(("site_id" = Uuid, Path)), responses((status = 201, body = Subscription), (status = 400, body = ApiErrorBody), (status = 404, body = ApiErrorBody), (status = 503, body = ApiErrorBody)))]
+#[utoipa::path(post, path = "/api/v1/sites/{site_id}/subscriptions", tag = "Subscriptions", request_body = CreateSubscription, params(("site_id" = Uuid, Path)), responses((status = 202, body = Subscription), (status = 400, body = ApiErrorBody), (status = 404, body = ApiErrorBody), (status = 503, body = ApiErrorBody)))]
 pub async fn create_subscription(
     State(state): State<AppState>,
     Path(site_id): Path<Uuid>,
     Json(input): Json<CreateSubscription>,
 ) -> Result<(StatusCode, Json<Subscription>), ApiError> {
-    validate_identity(&input.subscriber_identity)?;
-    let id = Uuid::new_v4();
-    let result = sqlx::query_as::<_, Subscription>("INSERT INTO subscriptions (id, site_id, subscriber_identity) VALUES ($1,$2,$3) ON CONFLICT (site_id, subscriber_identity) DO UPDATE SET subscriber_identity=EXCLUDED.subscriber_identity RETURNING id, site_id, subscriber_identity, created_at")
-        .bind(id).bind(site_id).bind(input.subscriber_identity).fetch_optional(&state.database).await.map_err(|e| {
-            if matches!(&e, sqlx::Error::Database(db) if db.code().as_deref() == Some("23503")) { ApiError(StatusCode::NOT_FOUND, "not_found", "Site not found") } else { db_error() }
+    let id = crate::web::create_pending_api(&state, site_id, &input.subscriber_identity)
+        .await
+        .map_err(|code| {
+            if code == "invalid_email" {
+                ApiError(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_email",
+                    "A valid email address is required",
+                )
+            } else if code == "site_not_found" {
+                ApiError(StatusCode::NOT_FOUND, "not_found", "Site not found")
+            } else {
+                db_error()
+            }
         })?;
-    let Some(subscription) = result else {
-        return Err(db_error());
-    };
-    Ok((StatusCode::CREATED, Json(subscription)))
+    let subscription = sqlx::query_as::<_, Subscription>(
+        "SELECT id,site_id,subscriber_identity,created_at,status FROM subscriptions WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_one(&state.database)
+    .await
+    .map_err(|_| db_error())?;
+    Ok((StatusCode::ACCEPTED, Json(subscription)))
 }
 
 #[utoipa::path(get, path = "/api/v1/subscriptions", tag = "Subscriptions", params(("subscriber_identity" = String, Query), ("page" = Option<i64>, Query), ("limit" = Option<i64>, Query)), responses((status = 200, body = Page<Subscription>), (status = 400, body = ApiErrorBody), (status = 503, body = ApiErrorBody)))]
@@ -274,7 +315,7 @@ pub async fn list_subscriptions(
         page: query.page,
         limit: query.limit,
     })?;
-    let items = sqlx::query_as::<_, Subscription>("SELECT id, site_id, subscriber_identity, created_at FROM subscriptions WHERE subscriber_identity=$1 ORDER BY created_at DESC, id LIMIT $2 OFFSET $3")
+    let items = sqlx::query_as::<_, Subscription>("SELECT id, site_id, subscriber_identity, created_at,status FROM subscriptions WHERE subscriber_identity=$1 ORDER BY created_at DESC, id LIMIT $2 OFFSET $3")
         .bind(query.subscriber_identity).bind(limit).bind(offset).fetch_all(&state.database).await.map_err(|_| db_error())?;
     Ok(Json(Page { items, page, limit }))
 }
@@ -286,7 +327,7 @@ pub async fn get_subscription(
     Query(query): Query<IdentityQuery>,
 ) -> Result<Json<Subscription>, ApiError> {
     validate_identity(&query.subscriber_identity)?;
-    sqlx::query_as::<_, Subscription>("SELECT id, site_id, subscriber_identity, created_at FROM subscriptions WHERE id=$1 AND subscriber_identity=$2")
+    sqlx::query_as::<_, Subscription>("SELECT id, site_id, subscriber_identity, created_at,status FROM subscriptions WHERE id=$1 AND subscriber_identity=$2")
         .bind(id).bind(query.subscriber_identity).fetch_optional(&state.database).await.map_err(|_| db_error())?.map(Json).ok_or(ApiError(StatusCode::NOT_FOUND, "not_found", "Subscription not found"))
 }
 

@@ -1,6 +1,6 @@
 # Security design
 
-These are required implementation controls, not features delivered by the scaffold.
+These controls describe the current implementation and remaining requirements.
 
 ## Phase 2 development API
 The site/subscription business API is disabled by default. Enabling it requires
@@ -30,6 +30,21 @@ Subscriber identities are caller-supplied opaque labels and do not establish own
   must not expose other customers' subscriptions. Define deletion/retention before launch.
 - Dependencies: review and lock, no runtime Swagger CDN; no local password auth bypass.
 - SMTP: explicit TLS mode, credential redaction; do not downgrade after TLS errors.
+- Public enrollment: monitored sites default to `public_subscriptions_enabled=false`; public
+  forms can only target existing enabled site IDs. The owner registration API remains
+  loopback-only and disabled by default.
+- Human verification: Turnstile is validated server-side with bounded response size and
+  timeout, expected action and hostname. Fail closed on errors. The test bypass is only
+  accepted when the development API is enabled on loopback.
+- Double opt-in: subscriptions start pending. Email tokens are purpose-bound, expire after
+  24 hours, are single-use, and are stored only as SHA-256 hashes. GET never consumes a
+  token or activates a subscription; POST also requires a one-use form nonce.
+- Management: requests return generic responses. Email links expire after 15 minutes and
+  are exchanged only through POST. Sessions last 30 minutes; PostgreSQL stores session
+  hashes, verified-email scope, and CSRF state. Management unsubscribe is POST-only.
+- Abuse controls: form bodies are capped at 16 KiB. PostgreSQL hourly buckets are shared
+  across replicas and limit requests per remote IP and normalized email. Do not trust
+  forwarded IP headers unless a trusted-proxy configuration is added.
 
 Email messages contain only PageRune branding, the monitored source URL, detection time
 and stable change UUID. They never include fetched page content or snapshots. SMTP

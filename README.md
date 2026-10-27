@@ -5,16 +5,14 @@ and visitors subscribe to all updates or selected topics. Pages are checked once
 before a daily combined digest. Update links go directly to the original pages.
 
 ## Status
-**Core monitoring, customizable HTML/text email, and secure unsubscribe implemented; not a complete or deployable subscription service.** The
-service persists normalized monitored URLs and development subscriptions, checks due sites
-asynchronously with SSRF controls, records hash-based change metadata, queues one email per
-active subscription in a PostgreSQL transactional outbox, and coordinates monitoring and
-delivery workers with leases and fencing. Site, subscription and change APIs are in
-OpenAPI; the business API is disabled by default and only available with explicit opt-in on
-a loopback bind. SMTP delivery is at-least-once; exactly-once delivery cannot be guaranteed
-if a process crashes after SMTP acceptance and before recording success. Tenant
-authentication, email verification, frontend, daily digest, and production onboarding are
-not implemented.
+**Core monitoring, public email double opt-in, management links, customizable notifications,
+and secure unsubscribe implemented.** PageRune stores state in PostgreSQL, checks normalized
+monitored URLs with SSRF controls, and coordinates monitoring and email workers across
+replicas with leases and fencing. Each site has a permanent subscription URL; public
+enrollment defaults off and must be enabled through the private development API. Visitors
+must pass server-side human verification and confirm their email before activation. SMTP
+delivery is at-least-once; exactly-once delivery cannot be guaranteed after SMTP acceptance
+and a process crash. OIDC and the owner dashboard are not implemented.
 
 ## Development
 Prerequisites: install Devbox, direnv with its shell hook enabled, and Docker Compose. The

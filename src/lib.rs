@@ -2,13 +2,14 @@ pub mod api;
 pub mod config;
 pub mod fetcher;
 pub mod notifications;
+pub mod web;
 pub mod worker;
 
 use axum::{
     Json, Router,
     body::{Body, to_bytes},
     extract::State,
-    extract::{Form, Path},
+    extract::{DefaultBodyLimit, Form, Path},
     http::{HeaderValue, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -17,6 +18,7 @@ use axum::{
 use serde::Serialize;
 use sha2::Digest;
 use sqlx::PgPool;
+use std::sync::Arc;
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
@@ -26,6 +28,8 @@ pub struct AppState {
     pub database: PgPool,
     pub dev_api_enabled: bool,
     pub public_base_url: String,
+    pub token_key: [u8; 32],
+    pub human_verifier: Arc<dyn web::HumanVerifier>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -168,8 +172,11 @@ async fn unsubscribe_post(
 
 #[derive(OpenApi)]
 #[openapi(
-    info(title = "PageRune", version = "0.2.0", description = "Core monitoring API. Business routes require the loopback-only development API gate until authentication is implemented."),
+    info(title = "PageRune", version = "0.3.0", description = "Public opt-in subscriptions use email verification. Site registration and the JSON business API remain disabled by default and loopback-only for development."),
     paths(healthz, readyz, unsubscribe_confirm, unsubscribe_post,
+        web::index, web::subscribe_page, web::subscribe, web::verify_page, web::verify,
+        web::manage, web::request_management, web::management_exchange_page,
+        web::exchange_management_token, web::management_unsubscribe,
         api::create_site, api::list_sites, api::get_site, api::update_site, api::delete_site,
         api::create_subscription, api::list_subscriptions, api::get_subscription, api::delete_subscription,
         api::list_changes, api::get_change),
@@ -187,9 +194,11 @@ pub fn app(state: AppState) -> Router {
             "/unsubscribe/{token}",
             get(unsubscribe_confirm).post(unsubscribe_post),
         )
+        .merge(web::router())
         .merge(business)
         .fallback(not_found)
         .merge(SwaggerUi::new("/swagger-ui").url("/api/openapi.json", ApiDoc::openapi()))
+        .layer(DefaultBodyLimit::max(16 * 1024))
         .with_state(state)
 }
 

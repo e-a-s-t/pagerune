@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f4f7f5">
+    <title>{% block title %}PageRune{% endblock %}</title>
+    <link rel="stylesheet" href="/static/pagerune.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="PageRune home"><span class="brand-mark" aria-hidden="true">P</span> PageRune</a>
+      <a class="manage-link" href="/manage">Manage subscriptions</a>
+    </header>
+    <main class="shell">{% block content %}{% endblock %}</main>
+    <footer class="footer">Website updates, delivered with care.</footer>
+  </body>
+</html>

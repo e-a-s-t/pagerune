@@ -24,6 +24,18 @@ a local capture server. OIDC tests use controlled discovery/JWKS and invalid-tok
 | MAIL-08 | HTML and text templates render shared variables and escape untrusted values | Both alternatives contain source/change/unsubscribe details; no source HTML is rendered | Unit / IMPLEMENTED |
 | MAIL-09 | Missing or syntactically invalid template | Missing file uses bundled default; invalid template is reported as terminal template failure | Unit / IMPLEMENTED |
 | SUB-10 | Unsubscribe GET, invalid token, repeated browser/one-click POST | GET is read-only; invalid token does not affect a subscription; POST is idempotent and removes only the matching subscription | HTTP + PostgreSQL / IMPLEMENTED |
+| PUB-01 | Site subscription flag omitted at registration | Flag defaults false and generated public URL remains inactive | HTTP + PostgreSQL |
+| PUB-02 | Owner enables/disables site enrollment through private API | Only enabled site URLs render an enrollment form; disabled site GET/POST cannot create subscriptions | HTTP |
+| PUB-03 | Public subscription with forged/failed/expired Turnstile token | Server rejects and does not create a subscription; local test verifier is loopback-only | HTTP + provider adapter |
+| PUB-04 | Valid public request, duplicate active/pending address, concurrent duplicate requests | Generic response; one site/email row; active row is not duplicated; pending token is rotated safely | PostgreSQL concurrency |
+| PUB-05 | Verification GET, valid POST, repeat POST, wrong/expired token, invalid CSRF nonce | GET never changes state; only the first valid POST activates | HTTP + PostgreSQL |
+| PUB-06 | Pending versus active notification generation and delivery | Pending rows receive no outbox message; verified active rows receive notifications | PostgreSQL integration |
+| PUB-07 | Verification email outbox delivery through Mailpit | Token link is derived from shared key and ID; only its hash is stored; delivery is leased and retryable | PostgreSQL + SMTP |
+| PUB-08 | Management email request for absent/existing address | Same response and timing shape; request is rate limited and email sent through outbox | HTTP + SMTP |
+| PUB-09 | Management token GET, POST exchange, repeated exchange, session on another replica | GET is read-only; POST consumes once; only verified email subscriptions are visible | HTTP + PostgreSQL |
+| PUB-10 | Management session CSRF, expiry and individual unsubscribe | Cross-session/expired requests fail; valid POST removes only selected subscription | HTTP + PostgreSQL |
+| PUB-11 | Subscription and management rate limits across replicas | IP/email windows are PostgreSQL-backed and consistently enforced | PostgreSQL concurrency |
+| PUB-12 | Oversized public form body and invalid email/URL fields | Body is rejected; only valid emails accepted; public input cannot register or change a website URL | HTTP |
 | MAIL-10 | Unsubscribe races with pending or in-flight delivery | Pending outbox work is cascaded; delivery checks subscription before SMTP; accepted mail cannot be recalled | PostgreSQL + SMTP |
 | MAIL-11 | Captured email headers and body in Mailpit | Multipart HTML/text and RFC 8058 headers are present | SMTP integration / IMPLEMENTED |
 | MON-02 | Failed fetch after baseline | Baseline remains unchanged and a stable error is recorded | PostgreSQL worker integration / IMPLEMENTED |
@@ -69,7 +81,7 @@ a local capture server. OIDC tests use controlled discovery/JWKS and invalid-tok
 | UI-01 | Owner creates/edits/pauses watch and copies links | Correct URLs; paused watch not polled | Browser |
 | OPS-02 | SIGTERM/restart, backup/restore | Durable jobs recover; no app PVC dependency | Deployment |
 
-Core tests are in `src/config.rs`, `src/fetcher.rs`, `src/worker.rs`, and `tests/http.rs`. Run
+Core tests are in `src/config.rs`, `src/fetcher.rs`, `src/worker.rs`, `src/web.rs`, and `tests/http.rs`. Run
 `direnv exec . devbox run check` with local PostgreSQL available; this runs formatting,
 Clippy, unit tests and PostgreSQL integration tests. The Devbox and Cargo lockfiles are
 committed so the configured toolchain and resolved dependencies stay reproducible.

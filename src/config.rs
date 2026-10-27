@@ -13,6 +13,10 @@ pub struct Config {
     pub notification_concurrency: usize,
     pub notification_max_attempts: i32,
     pub public_base_url: String,
+    pub token_key: [u8; 32],
+    pub turnstile_site_key: String,
+    pub turnstile_secret: Option<String>,
+    pub test_human_verification: bool,
 }
 
 impl Config {
@@ -27,6 +31,10 @@ impl Config {
             env::var("PAGERUNE_NOTIFICATION_CONCURRENCY").ok(),
             env::var("PAGERUNE_NOTIFICATION_MAX_ATTEMPTS").ok(),
             env::var("PAGERUNE_PUBLIC_BASE_URL").ok(),
+            env::var("PAGERUNE_TOKEN_KEY").ok(),
+            env::var("PAGERUNE_TURNSTILE_SITE_KEY").ok(),
+            env::var("PAGERUNE_TURNSTILE_SECRET").ok(),
+            env::var("PAGERUNE_TURNSTILE_TEST_MODE").ok(),
         )
     }
 
@@ -47,6 +55,10 @@ impl Config {
             None,
             None,
             None,
+            Some("0000000000000000000000000000000000000000000000000000000000000000".into()),
+            Some("test-site-key".into()),
+            Some("test-secret".into()),
+            None,
         )
     }
 
@@ -61,6 +73,10 @@ impl Config {
         notification_concurrency: Option<String>,
         notification_max_attempts: Option<String>,
         public_base_url: Option<String>,
+        token_key: Option<String>,
+        turnstile_site_key: Option<String>,
+        turnstile_secret: Option<String>,
+        test_human_verification: Option<String>,
     ) -> anyhow::Result<Self> {
         let bind = bind.unwrap_or_else(|| "127.0.0.1:8080".to_owned());
         let bind: SocketAddr = bind
@@ -95,6 +111,30 @@ impl Config {
         if !(1024..=20 * 1024 * 1024).contains(&max_response_bytes) {
             bail!("PAGERUNE_MAX_RESPONSE_BYTES must be between 1024 and 20971520");
         }
+        let token_key_text =
+            token_key.ok_or_else(|| anyhow::anyhow!("PAGERUNE_TOKEN_KEY is required"))?;
+        let token_key_bytes = hex::decode(&token_key_text)
+            .map_err(|_| anyhow::anyhow!("PAGERUNE_TOKEN_KEY must be 64 hexadecimal characters"))?;
+        let token_key: [u8; 32] = token_key_bytes
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("PAGERUNE_TOKEN_KEY must be 64 hexadecimal characters"))?;
+        let test_human_verification = match test_human_verification.as_deref().unwrap_or("false") {
+            "true" if dev_api_enabled && bind.ip().is_loopback() => true,
+            "true" => {
+                bail!("PAGERUNE_TURNSTILE_TEST_MODE requires the loopback-only development API")
+            }
+            "false" => false,
+            _ => bail!("PAGERUNE_TURNSTILE_TEST_MODE must be true or false"),
+        };
+        let turnstile_site_key = turnstile_site_key.unwrap_or_default();
+        if !test_human_verification
+            && (turnstile_site_key.is_empty()
+                || turnstile_secret.as_deref().unwrap_or_default().is_empty())
+        {
+            bail!(
+                "PAGERUNE_TURNSTILE_SITE_KEY and PAGERUNE_TURNSTILE_SECRET are required unless development test mode is enabled"
+            );
+        }
         Ok(Self {
             bind,
             database,
@@ -117,6 +157,10 @@ impl Config {
                 20,
             )? as i32,
             public_base_url: public_base_url.unwrap_or_else(|| "http://localhost:8080".into()),
+            token_key,
+            turnstile_site_key,
+            turnstile_secret,
+            test_human_verification,
         })
     }
 }

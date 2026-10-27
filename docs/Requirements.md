@@ -10,10 +10,12 @@ one daily combined message if any selected pages changed.
 - Rust application, PostgreSQL operated by CloudNativePG; no SQLite.
 - Stateless, interchangeable app replicas, no local persistent volume or sticky sessions.
 - Configurable SMTP host/port/auth/from/TLS via environment and Kubernetes secrets.
-- Admin authentication through configurable OIDC SSO; OAuth2-protected business API.
+- No OIDC or subscriber accounts in the public self-service subscription phase. The current site-registration API remains disabled by default and loopback-only; owner access is private/operator-mediated.
 - Every API documented in generated OpenAPI and available through bundled Swagger UI.
 - Minimal owner UI: sites, watches, pause/edit, latest check/error and ready-to-copy links.
-- Public subscription UI: choices, email verification, preference management and unsubscribe.
+- Public site-specific subscription pages are enabled explicitly per monitored site (default off); visitors cannot register arbitrary sites.
+- Public subscriptions require server-validated human verification and email double opt-in. Only verified subscriptions receive notifications.
+- Subscribers can request temporary email-based management sessions, unsubscribe individually, and use the existing token unsubscribe mechanism.
 - No subscriber password account. Ownership of an email is proved with a token flow.
 - Daily check immediately before daily digest; configurable schedule/timezone.
 - All relevant daily updates in one message per subscriber/channel across sites/customers.
@@ -41,6 +43,16 @@ one daily combined message if any selected pages changed.
 - Subscription deletion cascades to queued outbox rows, suppressing pending notifications. A message already accepted by SMTP cannot be recalled.
 - Email contains PageRune branding, source URL, detection time and stable change ID; it includes no snapshots or raw page content.
 - Notification email has customizable bundled HTML and plain-text templates. Each message has a cryptographically random unsubscribe token; PostgreSQL stores only SHA-256 token hashes. Tokens remain valid until subscription deletion. GET displays confirmation while POST removes only the associated subscription; RFC 8058 one-click POST is supported.
+
+## Phase 4 public subscriptions
+- Site registration returns a permanent `/subscribe/{site_id}` URL. `public_subscriptions_enabled` defaults to false and is controlled through the private development API. Disabled sites reject public enrollment.
+- Visitors submit only an email and a server-validated human-verification response; the site URL and interval are fixed by the registered monitored site. The interval defaults to 24 hours and remains subject to the five-minute minimum at site registration.
+- Cloudflare Turnstile is the first replaceable human-verification adapter. Development test mode is loopback-only and is not a CAPTCHA provider or production option.
+- Pending subscriptions are stored in PostgreSQL and deduplicated by normalized email and site. A generic response is returned whether the address is new, pending, or already active.
+- Verification tokens are high-entropy purpose-scoped capabilities, stored by hash and expiring after 24 hours. GET is read-only; a one-use CSRF nonce is required for POST activation.
+- Verification and management email requests use a PostgreSQL outbox, leased across replicas. SMTP work occurs after the transaction commits. Outbox rows store token IDs; purpose-scoped tokens are deterministically regenerated with a deployment secret, while PostgreSQL stores only token hashes.
+- Management links expire after 15 minutes and exchange via POST into a PostgreSQL-backed 30-minute HttpOnly session. Management views and unsubscribe actions are scoped to the verified email identity and protected by CSRF.
+- PostgreSQL is reset before the phase is deployed in development. The migration adds schema normally; no legacy subscriber reverification/backfill logic is required.
 
 ## Selection and links
 A site has a stable public slug, e.g. `/allmaningen/`.

@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}PageRune — request unavailable{% endblock %}
+{% block content %}
+<section class="message-card">
+  <p class="eyebrow">PageRune</p>
+  <h1>We couldn’t complete that request</h1>
+  <p>{{ message }}</p>
+  <a class="text-link" href="/">Return to PageRune</a>
+</section>
+{% endblock %}

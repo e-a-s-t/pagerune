@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}PageRune — check your email{% endblock %}
+{% block content %}
+<section class="message-card">
+  <div class="icon" aria-hidden="true">✉</div>
+  <p class="eyebrow">PageRune</p>
+  <h1>Check your inbox</h1>
+  <p>{{ message }}</p>
+  <a class="text-link" href="/">Return to PageRune</a>
+</section>
+{% endblock %}

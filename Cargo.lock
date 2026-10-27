@@ -1223,6 +1223,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "hex",
+ "hmac",
  "lettre",
  "minijinja",
  "rand 0.9.5",

@@ -28,9 +28,28 @@ and path semantics. The normalized URL has a unique database constraint. Change 
 stable and suitable for a future public URL, but this phase does not publish public change
 pages or retain page snapshots.
 
-For Phase 3 delivery, `subscriber_identity` is also used as the SMTP recipient. Supply a
-valid email address to receive notifications. Existing non-email development labels remain
-valid API identities but are recorded as permanent delivery failures if a change occurs.
+For Phase 4, the development subscription API accepts valid email addresses and creates
+pending subscriptions through the same verification service as the browser flow. It never
+activates an address directly. Site responses include the permanent `subscription_url` and
+`public_subscriptions_enabled` setting (default `false`); PATCH changes the setting.
+
+## Public subscription routes
+These server-rendered routes need no account. A public page accepts only an existing site
+UUID and is available only when the site owner has enabled public subscriptions. The URL
+and monitoring interval are fixed by the monitored site.
+
+| Method | Route | Purpose |
+|---|---|---|
+| GET | / | PageRune informational landing page |
+| GET, POST | /subscribe/{site_id} | Render or request a pending subscription |
+| GET, POST | /verify/{token} | Show a read-only form; POST consumes a token and activates |
+| GET, POST | /manage | Request a temporary management email link |
+| GET, POST | /manage/{token} | Show link exchange form; POST creates a session cookie |
+| POST | /manage/unsubscribe/{id} | Unsubscribe within the verified email session |
+
+Verification tokens expire after 24 hours, management links after 15 minutes, and sessions
+after 30 minutes. Requests return generic responses that do not disclose existing addresses.
+Form tokens and session actions are CSRF-protected. Turnstile is validated server-side.
 
 ## Planned authenticated APIs
 All under `/api/v1`. Every implemented endpoint must define request/response schemas,
@@ -64,13 +83,9 @@ The unsubscribe route is public and requires no session, cookie, or CSRF token; 
 standard form-encoded RFC 8058 one-click POSTs. Unknown and already-used tokens receive a
 generic completion response.
 
-## Planned HTML routes
-- `/{site_slug}/`: subscription form, query preselection `all=true` or repeated `watch`.
-- `/admin/`: SSO-only site/watch dashboard, checks/errors and copy-link controls.
-- `/subscribe/confirm`, `/preferences`, `/unsubscribe`: token entry/confirmation pages.
-- `/auth/login`, `/auth/callback`, `/auth/logout`: OIDC Authorization Code with PKCE,
-  state/nonce validation, CSRF-safe logout. Sessions in PostgreSQL, secure cookies.
-Reserve these path segments so public site slugs cannot collide with system routes.
+## Later owner interface
+An OIDC owner UI and tenant APIs are future work. Phase 4 adds no public slug selection,
+watch selection, arbitrary site registration, or OIDC session.
 
 ## Identity
 Admin JSON endpoints validate OAuth2 access tokens (issuer, signature, audience, expiry,
