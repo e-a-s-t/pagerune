@@ -16,16 +16,23 @@ executes SELECT 1. It does not validate migration or worker readiness. The fetch
 uses a 180-second lease and retries failed requests within five minutes. The database pool
 is capped at five connections per replica; size total connections against CNPG capacity.
 
-## Planned contract (not read by scaffold yet)
+## Implemented SMTP and notification settings
+| Variable | Meaning | Default |
+|---|---|---|
+| SMTP_HOST / SMTP_PORT | SMTP server endpoint | 127.0.0.1 / 1025 |
+| SMTP_TLS_MODE | `none`, `starttls`, or `implicit` | none |
+| SMTP_USERNAME / SMTP_PASSWORD | Optional auth; configure both or neither | unset |
+| SMTP_FROM_EMAIL / SMTP_FROM_NAME | Message sender | updates@localhost / PageRune |
+| SMTP_TIMEOUT_SECONDS | Connection/operation timeout | 15 (range 1–120) |
+| PAGERUNE_NOTIFICATION_CONCURRENCY | Maximum in-flight deliveries per replica | 2 (range 1–32) |
+| PAGERUNE_NOTIFICATION_MAX_ATTEMPTS | Attempts before terminal failure | 8 (range 1–20) |
+| PAGERUNE_PUBLIC_BASE_URL | Reserved for future PageRune links | http://localhost:8080 |
+
+## Planned contract
 | Variable | Meaning |
 |---|---|
-| PAGERUNE_PUBLIC_BASE_URL | Canonical HTTPS URL used to generate admin/subscriber links |
 | PAGERUNE_DIGEST_TIME | Daily local time; proposed default 18:00 |
 | PAGERUNE_TIMEZONE | IANA timezone; proposed default Europe/Stockholm |
-| SMTP_HOST / SMTP_PORT | SMTP endpoint |
-| SMTP_TLS_MODE | starttls, implicit, none (explicit local/trusted relay use) |
-| SMTP_USERNAME / SMTP_PASSWORD | Optional auth; both set together |
-| SMTP_FROM_EMAIL / SMTP_FROM_NAME | Configured sender address and display name |
 | OIDC_ISSUER_URL | Discovery issuer, verified exactly |
 | OIDC_CLIENT_ID / OIDC_CLIENT_SECRET | Server-side browser client; secret if confidential |
 | OIDC_AUDIENCE | Expected API access-token audience |

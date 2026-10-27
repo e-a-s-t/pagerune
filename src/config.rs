@@ -9,16 +9,24 @@ pub struct Config {
     pub dev_api_enabled: bool,
     pub fetch_timeout_seconds: u64,
     pub max_response_bytes: usize,
+    pub smtp: crate::notifications::SmtpConfig,
+    pub notification_concurrency: usize,
+    pub notification_max_attempts: i32,
+    pub public_base_url: String,
 }
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
-        Self::from_values(
+        Self::from_values_full(
             env::var("PAGERUNE_BIND").ok(),
             env::var("DATABASE_URL").ok(),
             env::var("PAGERUNE_DEV_API_ENABLED").ok(),
             env::var("PAGERUNE_FETCH_TIMEOUT_SECONDS").ok(),
             env::var("PAGERUNE_MAX_RESPONSE_BYTES").ok(),
+            crate::notifications::SmtpConfig::from_env()?,
+            env::var("PAGERUNE_NOTIFICATION_CONCURRENCY").ok(),
+            env::var("PAGERUNE_NOTIFICATION_MAX_ATTEMPTS").ok(),
+            env::var("PAGERUNE_PUBLIC_BASE_URL").ok(),
         )
     }
 
@@ -28,6 +36,31 @@ impl Config {
         dev_api_enabled: Option<String>,
         fetch_timeout_seconds: Option<String>,
         max_response_bytes: Option<String>,
+    ) -> anyhow::Result<Self> {
+        Self::from_values_full(
+            bind,
+            database_url,
+            dev_api_enabled,
+            fetch_timeout_seconds,
+            max_response_bytes,
+            crate::notifications::SmtpConfig::default(),
+            None,
+            None,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_values_full(
+        bind: Option<String>,
+        database_url: Option<String>,
+        dev_api_enabled: Option<String>,
+        fetch_timeout_seconds: Option<String>,
+        max_response_bytes: Option<String>,
+        smtp: crate::notifications::SmtpConfig,
+        notification_concurrency: Option<String>,
+        notification_max_attempts: Option<String>,
+        public_base_url: Option<String>,
     ) -> anyhow::Result<Self> {
         let bind = bind.unwrap_or_else(|| "127.0.0.1:8080".to_owned());
         let bind: SocketAddr = bind
@@ -68,8 +101,41 @@ impl Config {
             dev_api_enabled,
             fetch_timeout_seconds,
             max_response_bytes,
+            smtp,
+            notification_concurrency: parse_range(
+                notification_concurrency,
+                "PAGERUNE_NOTIFICATION_CONCURRENCY",
+                2,
+                1,
+                32,
+            )?,
+            notification_max_attempts: parse_range(
+                notification_max_attempts,
+                "PAGERUNE_NOTIFICATION_MAX_ATTEMPTS",
+                8,
+                1,
+                20,
+            )? as i32,
+            public_base_url: public_base_url.unwrap_or_else(|| "http://localhost:8080".into()),
         })
     }
+}
+
+fn parse_range(
+    value: Option<String>,
+    name: &str,
+    default: usize,
+    min: usize,
+    max: usize,
+) -> anyhow::Result<usize> {
+    let parsed = value
+        .unwrap_or_else(|| default.to_string())
+        .parse::<usize>()
+        .map_err(|_| anyhow::anyhow!("{name} must be an integer"))?;
+    if !(min..=max).contains(&parsed) {
+        bail!("{name} must be between {min} and {max}");
+    }
+    Ok(parsed)
 }
 
 #[cfg(test)]

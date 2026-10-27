@@ -48,8 +48,24 @@ customer subscriber details. Subscription verification and unsubscribe scopes ar
    one transaction. A crash leaves an expiring lease that another replica can reclaim.
 
 Default interval is 24 hours; site intervals range from five minutes to 30 days. A failed
-check retries after at most five minutes. This core phase does not implement daily digest
-cycles or email delivery.
+check retries after at most five minutes. On a changed hash, a site-change row and one
+notification-outbox row per active subscription are committed in the same transaction.
+Initial baselines and unchanged checks write neither.
+
+## Notification outbox (implemented)
+The outbox is PostgreSQL-backed and shared by all replicas. A unique `(change_id,
+subscription_id)` constraint prevents duplicate rows. Workers claim due rows with
+`FOR UPDATE SKIP LOCKED`, increment a fencing generation and set a 180-second lease. The
+claim commits before SMTP. Success, retry, and terminal failure updates require the same
+owner and generation and an unexpired lease. Expired `sending` rows are recoverable.
+Concurrency is bounded per replica. Retry delay is exponential with jitter capped at six
+hours; after the configured attempt limit the row is terminal.
+
+SMTP delivery is at-least-once. If SMTP accepts a message and the process crashes before
+PostgreSQL records success, a recovered row can send again. A stable Message-ID aids
+correlation but does not provide exactly-once semantics. Deleting a subscription cascades
+to queued notifications; an SMTP-accepted message cannot be recalled. Messages link only
+to the monitored URL until PageRune frontend links exist.
 
 ## Daily cycle and digest (planned)
 1. Any replica may create the scheduled cycle; a unique key prevents duplicates.

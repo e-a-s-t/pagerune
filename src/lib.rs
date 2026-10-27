@@ -1,6 +1,7 @@
 pub mod api;
 pub mod config;
 pub mod fetcher;
+pub mod notifications;
 pub mod worker;
 
 use axum::{

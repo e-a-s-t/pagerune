@@ -26,6 +26,10 @@ and path semantics. The normalized URL has a unique database constraint. Change 
 stable and suitable for a future public URL, but this phase does not publish public change
 pages or retain page snapshots.
 
+For Phase 3 delivery, `subscriber_identity` is also used as the SMTP recipient. Supply a
+valid email address to receive notifications. Existing non-email development labels remain
+valid API identities but are recorded as permanent delivery failures if a change occurs.
+
 ## Planned authenticated APIs
 All under `/api/v1`. Every implemented endpoint must define request/response schemas,
 stable operationId, validation errors, security requirements and tenant scope in Utoipa.

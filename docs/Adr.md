@@ -29,6 +29,7 @@ Proposed defaults require confirmation before being represented as settled produ
 | ADR-022 | Accepted | PostgreSQL row leases with expiry and fencing for checks | Replicas coordinate durably without another queue. Network I/O occurs outside transactions; stale generations cannot write results. |
 | ADR-023 | Accepted | Configurable per-site intervals with 24-hour default and five-minute minimum | Supports core interval configuration while retaining the existing daily cadence as the default. |
 | ADR-024 | Accepted | Change history stores stable identifiers and hash metadata only | Supports future permanent change URLs without storing page snapshots or publishing public diff pages. |
+| ADR-025 | Accepted | Email notifications use a PostgreSQL transactional outbox | Change event and per-subscription deliveries commit atomically; replicas claim with `SKIP LOCKED`, expiring leases and fencing. SMTP occurs outside transactions. Delivery is at-least-once because SMTP acceptance may precede a crash before success is recorded. |
 
 For a changed decision add context, options, rationale and consequences. Supersede an ADR
 rather than silently rewriting an accepted decision. Keep the implementation roadmap

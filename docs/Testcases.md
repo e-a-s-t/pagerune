@@ -14,6 +14,13 @@ a local capture server. OIDC tests use controlled discovery/JWKS and invalid-tok
 | CORE-02 | Invalid scheme, userinfo, interval, or pagination | Request rejected with structured error | Unit / HTTP |
 | SUB-09 | Create, list, retrieve, and delete a development subscription | Operations succeed only for the matching opaque subscriber identity | PostgreSQL integration / IMPLEMENTED |
 | MON-01 | Initial, unchanged, then changed hash | Baseline is silent; unchanged content is ignored; changed content records old/new hashes | PostgreSQL worker integration / IMPLEMENTED |
+| MAIL-01 | Baseline, unchanged, changed with multiple subscriptions | Only changed content creates one unique outbox row per active subscription | PostgreSQL worker integration / IMPLEMENTED |
+| MAIL-02 | Subscription created after a change | No historical outbox rows are created | PostgreSQL worker integration |
+| MAIL-03 | Delete subscription with queued notification | Pending rows are removed by FK cascade | PostgreSQL worker integration / IMPLEMENTED |
+| MAIL-04 | Concurrent outbox claims, expired lease and stale completion | Claims do not overlap; recovery advances generation; stale worker cannot record a result | PostgreSQL integration / IMPLEMENTED |
+| MAIL-05 | SMTP success to local capture server | Multipart plain-text/HTML message is accepted by Mailpit | SMTP integration / IMPLEMENTED |
+| MAIL-06 | Temporary/permanent SMTP rejection and retry limit | Backoff retry or terminal failure is recorded without logging body/secrets | SMTP integration |
+| MAIL-07 | Worker shutdown/restart | Active send drains; expired work is recoverable after restart | PostgreSQL + SMTP integration |
 | MON-02 | Failed fetch after baseline | Baseline remains unchanged and a stable error is recorded | PostgreSQL worker integration / IMPLEMENTED |
 | SEC-05 | Private/loopback/metadata destination | Fetch is rejected before connecting | Unit + local HTTP / IMPLEMENTED |
 | API-02 | Malformed JSON and disabled business API | Structured JSON error with request ID | HTTP integration / IMPLEMENTED |

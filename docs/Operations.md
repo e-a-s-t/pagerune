@@ -18,15 +18,22 @@ Configure public base URL and OIDC redirect using externally visible HTTPS addre
 ## Lifecycle
 Migrations run once as an explicit deployment Job before rollout, with compatible
 expand/contract schema changes. Do not have every web replica independently execute DDL.
-No migrations are shipped yet. Add readiness schema-version checks when schema exists.
+Migrations are embedded and applied explicitly through the Devbox migrate command; add
+readiness schema-version checks as schema evolution requires.
 Liveness is independent of database availability. Drain requests and stop claiming work
 on SIGTERM; expired leases recover unfinished jobs. Keep app builds separate from migrator.
 
 ## Observability and recovery
-Current: JSON logs, `/healthz`, database-only `/readyz`, and a PostgreSQL-backed check
-worker on each replica. Workers claim due sites using a 180-second lease and fencing
-generation; HTTP timeout is capped at 120 seconds, so abandoned work becomes reclaimable.
-The worker does not hold a database transaction during DNS or HTTP work. Planned: metrics
+Current: JSON logs, `/healthz`, database-only `/readyz`, and PostgreSQL-backed check and
+notification workers on each replica. The notification worker uses bounded per-replica
+concurrency, 180-second leases, fencing generations and `SKIP LOCKED`. It commits claims
+before SMTP; expired leases recover work after a crash. Retry delay is exponential with
+jitter, capped at six hours; eight attempts is the default before terminal failure. SMTP
+health does not affect `/readyz`. Inspect `notification_outbox` for pending/sending/failed
+rows and `last_error`; correct SMTP configuration or recipient problems before manually
+requeueing terminal rows. Do not log message bodies or SMTP credentials. The monitoring
+worker uses a 180-second lease and fencing generation; HTTP timeout is capped at 120 seconds.
+Planned: metrics
 for check lateness, fetch success/failure, outbox age, retries and terminal delivery errors.
 No PII/high-cardinality recipient labels in metrics. Alert on missed daily cycles, not
 only process health. Use NetworkPolicy and SMTP/fetch egress constraints where practical.

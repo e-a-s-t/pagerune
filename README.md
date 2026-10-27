@@ -5,13 +5,16 @@ and visitors subscribe to all updates or selected topics. Pages are checked once
 before a daily combined digest. Update links go directly to the original pages.
 
 ## Status
-**Core monitoring implemented; not a complete or deployable subscription service.** The
+**Core monitoring and email notifications implemented; not a complete or deployable subscription service.** The
 service persists normalized monitored URLs and development subscriptions, checks due sites
-asynchronously with SSRF controls, records hash-based change metadata, and coordinates
-workers with PostgreSQL leases and fencing. Site, subscription and change APIs are in
+asynchronously with SSRF controls, records hash-based change metadata, queues one email per
+active subscription in a PostgreSQL transactional outbox, and coordinates monitoring and
+delivery workers with leases and fencing. Site, subscription and change APIs are in
 OpenAPI; the business API is disabled by default and only available with explicit opt-in on
-a loopback bind. Tenant authentication, email verification/delivery, frontend, daily digest,
-and production onboarding are not implemented.
+a loopback bind. SMTP delivery is at-least-once; exactly-once delivery cannot be guaranteed
+if a process crashes after SMTP acceptance and before recording success. Tenant
+authentication, email verification, frontend, daily digest, and production onboarding are
+not implemented.
 
 ## Development
 Prerequisites: install Devbox, direnv with its shell hook enabled, and Docker Compose. The

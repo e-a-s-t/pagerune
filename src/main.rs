@@ -41,9 +41,23 @@ async fn main() -> anyhow::Result<()> {
             max_body_bytes: config.max_response_bytes,
         },
     ));
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let notification_worker = tokio::spawn(pagerune::notifications::run(
+        state.database.clone(),
+        config.smtp.clone(),
+        config.notification_concurrency,
+        config.notification_max_attempts,
+        cancel.clone(),
+    ));
+    let shutdown_cancel = cancel.clone();
     let server_result = axum::serve(listener, app(state))
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            shutdown_cancel.cancel();
+        })
         .await;
+    cancel.cancel();
+    notification_worker.await?;
     worker.abort();
     server_result?;
     Ok(())

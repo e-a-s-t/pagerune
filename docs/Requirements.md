@@ -34,6 +34,13 @@ one daily combined message if any selected pages changed.
   be enabled for development on a loopback bind. Subscriber identities are opaque labels,
   not authentication credentials.
 
+## Phase 3 email notifications
+- A detected change and one outbox notification per active subscription are committed atomically; initial baselines and unchanged checks are silent.
+- Replicas claim deliveries using PostgreSQL `SKIP LOCKED`, expiring leases and fencing generations. SMTP work occurs outside transactions.
+- Delivery is at-least-once: SMTP acceptance followed by a crash before recording success can produce a duplicate. Exactly-once delivery is not guaranteed.
+- Subscription deletion cascades to queued outbox rows, suppressing pending notifications. A message already accepted by SMTP cannot be recalled.
+- Email contains PageRune branding, source URL, detection time and stable change ID; it includes no snapshots or raw page content.
+
 ## Selection and links
 A site has a stable public slug, e.g. `/allmaningen/`.
 Supported preselection: `?all=true`, `?watch=nyheter`, and repeated `watch` parameters.

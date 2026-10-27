@@ -31,7 +31,7 @@ direnv exec . docker compose up -d
 
 Compose reads `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD` from the direnv environment. It publishes PostgreSQL on `127.0.0.1:5432` and Mailpit's SMTP and web interfaces on `127.0.0.1:1025` and `127.0.0.1:8025`, respectively. PostgreSQL stores its data in the named `postgres-data` volume.
 
-The locally running Rust application uses `DATABASE_URL` from `.env` to connect to PostgreSQL at `127.0.0.1:5432`. The example's database name, user, and password match the Compose variables. SMTP settings in `.env` point at Mailpit (`SMTP_HOST=127.0.0.1`, `SMTP_PORT=1025`, `SMTP_TLS_MODE=none`), which is suitable for local mail capture. These settings remain planned; this phase does not send email.
+The locally running Rust application uses `DATABASE_URL` from `.env` to connect to PostgreSQL at `127.0.0.1:5432`. The example's database name, user, and password match the Compose variables. SMTP settings point at Mailpit (`SMTP_HOST=127.0.0.1`, `SMTP_PORT=1025`, `SMTP_TLS_MODE=none`, empty auth, `SMTP_FROM_EMAIL=updates@localhost`, `SMTP_FROM_NAME=PageRune`).
 
 Apply the versioned SQLx migrations before starting the application:
 
@@ -39,11 +39,11 @@ Apply the versioned SQLx migrations before starting the application:
 direnv exec . devbox run migrate
 ```
 
-The current baseline is intentionally empty; it initializes migration tracking without adding product tables. Run this command again after pulling new migrations.
+Migrations create the monitoring and notification outbox tables. Run this command again after pulling new migrations.
 
 ## Run PageRune and checks
 
-Run the server locally:
+Run the server locally. The worker sends email for changes detected after subscription; baseline fetches remain silent:
 
 ```sh
 direnv exec . devbox run run
@@ -66,6 +66,17 @@ Available Devbox scripts are:
 - `devbox run build` / `devbox run build-release`: build debug or release binaries.
 
 Prefix these with `direnv exec .` if direnv has not already loaded the project environment in the current shell. `DATABASE_URL` is required at startup. The server binds to `127.0.0.1:8080` by default. Swagger UI is available at <http://127.0.0.1:8080/swagger-ui/> and the generated OpenAPI document at <http://127.0.0.1:8080/api/openapi.json>. Mailpit's web interface is <http://127.0.0.1:8025>.
+
+## Verify an email in Mailpit
+
+1. Start PostgreSQL and Mailpit with `direnv exec . docker compose up -d`.
+2. Apply migrations and start PageRune using the commands above.
+3. Open Swagger at <http://127.0.0.1:8080/swagger-ui/>. With the development API enabled, register a public monitored website using `POST /api/v1/sites`.
+4. Create a subscription using `POST /api/v1/sites/{site_id}/subscriptions` with an email address as `subscriber_identity`.
+5. Wait for a later check to detect a content change (the initial baseline does not notify).
+6. Open <http://localhost:8025> and inspect the captured email. It includes the source URL, detection time and stable change UUID, but no page snapshot.
+
+To speed up local checks, set the site's `interval_seconds` to the five-minute minimum. Fetching rejects loopback/private URLs, so use a public HTTP(S) website. Mailpit captures SMTP locally; no email is delivered externally.
 
 ## Inspect and stop services
 
@@ -98,5 +109,6 @@ change history, SSRF restrictions, and PostgreSQL leases with fencing. Migration
 applied explicitly. The business API is disabled unless `PAGERUNE_DEV_API_ENABLED=true`;
 that option requires the default loopback bind and is only for local development.
 
-OIDC, tenant membership, subscriber verification, HTML UI, daily digest, SMTP delivery, and
-public change pages remain unimplemented. Mailpit is available for later mail integration.
+OIDC, tenant membership, subscriber verification, HTML UI, daily digest, and public change
+pages remain unimplemented. Email delivery uses PostgreSQL outbox rows; Mailpit is the
+local SMTP capture service.

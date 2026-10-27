@@ -31,4 +31,9 @@ Subscriber identities are caller-supplied opaque labels and do not establish own
 - Dependencies: review and lock, no runtime Swagger CDN; no local password auth bypass.
 - SMTP: explicit TLS mode, credential redaction; do not downgrade after TLS errors.
 
+Email messages contain only PageRune branding, the monitored source URL, detection time
+and stable change UUID. They never include fetched page content or snapshots. SMTP
+credentials are read from environment injection and never included in tracing fields.
+Delivery remains at-least-once across the SMTP-acceptance/database-commit ambiguity.
+
 Owner must select retention periods, privacy notice and license before public launch.

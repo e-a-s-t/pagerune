@@ -80,8 +80,12 @@ async fn apply_result(
                 if let (Some(previous), Some(new_hash)) = (previous.as_deref(), new_hash.as_deref())
                     && previous != new_hash
                 {
+                    let change_id = Uuid::new_v4();
                     sqlx::query("INSERT INTO site_changes (id, site_id, previous_content_hash, new_content_hash) VALUES ($1,$2,$3,$4)")
-                        .bind(Uuid::new_v4()).bind(job.id).bind(previous).bind(new_hash).execute(&mut *tx).await?;
+                        .bind(change_id).bind(job.id).bind(previous).bind(new_hash).execute(&mut *tx).await?;
+                    let created = sqlx::query("INSERT INTO notification_outbox (id, change_id, subscription_id, recipient) SELECT gen_random_uuid(), $1, s.id, s.subscriber_identity FROM subscriptions s WHERE s.site_id=$2 ON CONFLICT (change_id, subscription_id) DO NOTHING")
+                        .bind(change_id).bind(job.id).execute(&mut *tx).await?.rows_affected();
+                    tracing::info!(change_id = %change_id, site_id = %job.id, notification_count = created, "change and notifications created");
                 }
                 sqlx::query("UPDATE monitored_sites SET current_content_hash=$4, etag=COALESCE($5, etag), last_modified=COALESCE($6, last_modified), last_checked_at=now(), last_successful_check_at=now(), current_status='ok', last_error=NULL, next_check_at=now() + ($7 * interval '1 second'), lease_owner=NULL, lease_expires_at=NULL, updated_at=now() WHERE id=$1 AND lease_owner=$2 AND lease_generation=$3")
                     .bind(job.id).bind(job.lease_owner).bind(job.lease_generation).bind(new_hash).bind(result.etag).bind(result.last_modified).bind(job.interval_seconds).execute(&mut *tx).await?;
@@ -155,8 +159,25 @@ mod tests {
         let pool = database().await;
         let site_id = Uuid::new_v4();
         let url = format!("https://example.com/worker-test/{site_id}");
+        sqlx::query("UPDATE monitored_sites SET next_check_at=now()+interval '1 day', lease_expires_at=NULL")
+            .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO monitored_sites (id, original_url, normalized_url, next_check_at) VALUES ($1,$2,$2,now())")
             .bind(site_id).bind(&url).execute(&pool).await.unwrap();
+        let subscription_ids = [Uuid::new_v4(), Uuid::new_v4()];
+        for (id, recipient) in subscription_ids
+            .into_iter()
+            .zip(["alice@example.test", "bob@example.test"])
+        {
+            sqlx::query(
+                "INSERT INTO subscriptions (id,site_id,subscriber_identity) VALUES ($1,$2,$3)",
+            )
+            .bind(id)
+            .bind(site_id)
+            .bind(recipient)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
         let state = AppState {
             database: pool.clone(),
             dev_api_enabled: false,
@@ -186,6 +207,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(changes, 0, "initial check establishes only a baseline");
+        let notifications: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM notification_outbox WHERE subscription_id=ANY($1)",
+        )
+        .bind(&subscription_ids[..])
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(notifications, 0, "baseline does not enqueue notifications");
 
         sqlx::query("UPDATE monitored_sites SET next_check_at=now() WHERE id=$1")
             .bind(site_id)
@@ -212,6 +241,17 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(changes, 0, "unchanged content creates no event");
+        let notifications: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM notification_outbox WHERE subscription_id=ANY($1)",
+        )
+        .bind(&subscription_ids[..])
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            notifications, 0,
+            "unchanged content does not enqueue notifications"
+        );
 
         sqlx::query("UPDATE monitored_sites SET next_check_at=now() WHERE id=$1")
             .bind(site_id)
@@ -286,6 +326,42 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(changes, vec![("a".repeat(64), "c".repeat(64))]);
+        let notifications: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM notification_outbox WHERE subscription_id=ANY($1)",
+        )
+        .bind(&subscription_ids[..])
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(notifications, 2, "one notification per active subscriber");
+        let late_subscription = Uuid::new_v4();
+        sqlx::query("INSERT INTO subscriptions (id,site_id,subscriber_identity) VALUES ($1,$2,'late@example.test')")
+            .bind(late_subscription).bind(site_id).execute(&pool).await.unwrap();
+        let historical: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM notification_outbox WHERE subscription_id=$1")
+                .bind(late_subscription)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            historical, 0,
+            "new subscriptions do not receive historical notifications"
+        );
+        sqlx::query("DELETE FROM subscriptions WHERE id=$1")
+            .bind(subscription_ids[0])
+            .execute(&pool)
+            .await
+            .unwrap();
+        let notifications: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM notification_outbox WHERE subscription_id=$1")
+                .bind(subscription_ids[0])
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            notifications, 0,
+            "deleting a subscription suppresses its queued rows"
+        );
 
         sqlx::query("UPDATE monitored_sites SET next_check_at=now() WHERE id=$1")
             .bind(site_id)
