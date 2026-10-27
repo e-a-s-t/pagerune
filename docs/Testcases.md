@@ -10,6 +10,13 @@ a local capture server. OIDC tests use controlled discovery/JWKS and invalid-tok
 | API-01 | Fetch OpenAPI | Every implemented operation and error response described | Contract / IMPLEMENTED |
 | CFG-00 | Missing, malformed or non-PostgreSQL config | Startup validation rejects it without echoing secrets | Unit / IMPLEMENTED |
 | DB-00 | PostgreSQL connectivity and baseline migration | `SELECT 1` succeeds and migration version is recorded | PostgreSQL integration / IMPLEMENTED |
+| CORE-01 | Equivalent URL registration | Normalized URL uniqueness returns the same monitored site | Unit + PostgreSQL integration / IMPLEMENTED |
+| CORE-02 | Invalid scheme, userinfo, interval, or pagination | Request rejected with structured error | Unit / HTTP |
+| SUB-09 | Create, list, retrieve, and delete a development subscription | Operations succeed only for the matching opaque subscriber identity | PostgreSQL integration / IMPLEMENTED |
+| MON-01 | Initial, unchanged, then changed hash | Baseline is silent; unchanged content is ignored; changed content records old/new hashes | PostgreSQL worker integration / IMPLEMENTED |
+| MON-02 | Failed fetch after baseline | Baseline remains unchanged and a stable error is recorded | PostgreSQL worker integration / IMPLEMENTED |
+| SEC-05 | Private/loopback/metadata destination | Fetch is rejected before connecting | Unit + local HTTP / IMPLEMENTED |
+| API-02 | Malformed JSON and disabled business API | Structured JSON error with request ID | HTTP integration / IMPLEMENTED |
 | OWN-01 | Site ownership not verified | Cannot activate watches or publish subscription form | Integration |
 | TEN-01 | Tenant A requests B site/watch IDs | No disclosure or mutation; composite FK prevents cross-link | Integration |
 | TEN-02 | Same person subscribes to two tenants | Single daily digest; owners see only their own contact scope | Integration |
@@ -24,15 +31,16 @@ a local capture server. OIDC tests use controlled discovery/JWKS and invalid-tok
 | SUB-06 | Preselected watch, multiple watches, invalid/cross-site slug | Correct preselection; no cross-site enrollment | HTTP/UI |
 | SUB-07 | Manage/unsubscribe link | Scope enforced; opt-out honored by pending deliveries | Integration |
 | SUB-08 | Subscribe after today's changes | No historical backfill | Integration |
-| CHECK-01 | First successful fetch | Silent baseline; no digest | Worker |
-| CHECK-02 | Same normalized body/hash | No change and no message | Worker |
-| CHECK-03 | Text or link target changes | One cycle change with direct original URL | Worker |
+| CHECK-01 | First successful fetch | Silent baseline; no change record | PostgreSQL worker integration / IMPLEMENTED |
+| CHECK-02 | Same content hash | No duplicate change record | PostgreSQL worker integration / IMPLEMENTED |
+| CHECK-03 | Later content hash differs | One metadata record stores old/new hashes | PostgreSQL worker integration / IMPLEMENTED |
 | CHECK-04 | Script/style/noise-only changes | No false update after normalization | Unit |
-| CHECK-05 | Timeout, non-2xx, empty selector, oversize content | Old baseline retained; error visible to owner | Worker |
+| CHECK-05 | Timeout, non-2xx, oversize response | Old baseline retained; stable error status recorded | Local HTTP + PostgreSQL / IMPLEMENTED |
+| CHECK-07 | Empty selector or selector normalization change | Fail check or silently rebaseline | Worker |
 | CHECK-06 | Selector/normalizer configuration changes | Silent rebaseline | Worker |
 | JOB-01 | Two replicas claim/create same cycle/watch | Single logical job/result | PostgreSQL concurrency |
-| JOB-02 | Worker dies; lease expires | Another worker reclaims safely | PostgreSQL concurrency |
-| JOB-03 | Expired worker later completes | Fencing blocks stale result | PostgreSQL concurrency |
+| JOB-02 | Worker dies; lease expires | Another worker reclaims safely | PostgreSQL worker integration / IMPLEMENTED |
+| JOB-03 | Expired worker later completes | Fencing blocks stale result | PostgreSQL worker integration / IMPLEMENTED |
 | JOB-04 | Slow source past cutoff | Other changes delivered; sealed cycle immutable | Worker |
 | DIGEST-01 | Several selected pages/sites change | One message per destination/channel, no repeated source | Integration |
 | DIGEST-02 | No selected changes or unverified contact | No message | Integration |
@@ -41,7 +49,7 @@ a local capture server. OIDC tests use controlled discovery/JWKS and invalid-tok
 | DIGEST-05 | SMTP accepts then process crashes | Ambiguous result handled/documented; no exactly-once claim | Fault injection |
 | DIGEST-06 | Check every content link | All updates point to original pages; no public diff link | Template |
 | TIME-01 | DST, restart and overdue cycle | One logical daily cycle per configured local date | Worker |
-| SEC-01 | Private/loopback/metadata URL, redirect or rebinding | Fetch denied, including actual resolved connection | Integration |
+| SEC-01 | Redirect to private network or DNS rebinding | Fetch denied after re-resolving and validating destination | Integration |
 | SEC-02 | Remote HTML/script in label/content | Escaped; no executable output | HTTP/mail |
 | SEC-03 | Repeated requests, forged form, cross-origin POST | Rate limit/CSRF controls work | HTTP |
 | SEC-04 | Inspect logs | No secrets, recipient addresses or token URLs | Integration |
@@ -49,7 +57,7 @@ a local capture server. OIDC tests use controlled discovery/JWKS and invalid-tok
 | UI-01 | Owner creates/edits/pauses watch and copies links | Correct URLs; paused watch not polled | Browser |
 | OPS-02 | SIGTERM/restart, backup/restore | Durable jobs recover; no app PVC dependency | Deployment |
 
-Phase 1 tests are in `src/config.rs` and `tests/http.rs`. Run
+Core tests are in `src/config.rs`, `src/fetcher.rs`, `src/worker.rs`, and `tests/http.rs`. Run
 `direnv exec . devbox run check` with local PostgreSQL available; this runs formatting,
 Clippy, unit tests and PostgreSQL integration tests. The Devbox and Cargo lockfiles are
 committed so the configured toolchain and resolved dependencies stay reproducible.

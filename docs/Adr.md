@@ -25,6 +25,10 @@ Proposed defaults require confirmation before being represented as settled produ
 | ADR-018 | Proposed | DNS TXT or same-origin well-known proof | Site control verification must not rely on email alone. |
 | ADR-019 | Proposed | Shared SMTP sender with customer/site labels | Sender identity stays within the configured verified domain. |
 | ADR-020 | Open | Retention limits and license | Owner must choose; no license or deletion periods fabricated. |
+| ADR-021 | Accepted | Phase 2 implements core monitoring before authentication | Ship useful fetching, subscriptions and scheduling while preserving OIDC/OAuth2 as a required later phase. The unauthenticated business API is disabled by default and may only be enabled on loopback for development. |
+| ADR-022 | Accepted | PostgreSQL row leases with expiry and fencing for checks | Replicas coordinate durably without another queue. Network I/O occurs outside transactions; stale generations cannot write results. |
+| ADR-023 | Accepted | Configurable per-site intervals with 24-hour default and five-minute minimum | Supports core interval configuration while retaining the existing daily cadence as the default. |
+| ADR-024 | Accepted | Change history stores stable identifiers and hash metadata only | Supports future permanent change URLs without storing page snapshots or publishing public diff pages. |
 
 For a changed decision add context, options, rationale and consequences. Supersede an ADR
 rather than silently rewriting an accepted decision. Keep the implementation roadmap

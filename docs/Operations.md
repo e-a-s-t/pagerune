@@ -23,8 +23,11 @@ Liveness is independent of database availability. Drain requests and stop claimi
 on SIGTERM; expired leases recover unfinished jobs. Keep app builds separate from migrator.
 
 ## Observability and recovery
-Current: JSON logs, /healthz and database-only /readyz. Planned: request IDs; metrics for
-cycle lateness, fetch success/failure, outbox age, retries and terminal delivery errors.
+Current: JSON logs, `/healthz`, database-only `/readyz`, and a PostgreSQL-backed check
+worker on each replica. Workers claim due sites using a 180-second lease and fencing
+generation; HTTP timeout is capped at 120 seconds, so abandoned work becomes reclaimable.
+The worker does not hold a database transaction during DNS or HTTP work. Planned: metrics
+for check lateness, fetch success/failure, outbox age, retries and terminal delivery errors.
 No PII/high-cardinality recipient labels in metrics. Alert on missed daily cycles, not
 only process health. Use NetworkPolicy and SMTP/fetch egress constraints where practical.
 Configure CNPG backups and test restoration; determine recovery objectives and retention

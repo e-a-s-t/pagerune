@@ -5,11 +5,13 @@ and visitors subscribe to all updates or selected topics. Pages are checked once
 before a daily combined digest. Update links go directly to the original pages.
 
 ## Status
-**Application foundation, not a complete or deployable subscription service.** Implemented:
-Rust/Axum HTTP server, validated PostgreSQL configuration, SQLx migrations, database
-readiness, JSON logs, graceful shutdown, generated OpenAPI at `/api/openapi.json` and
-bundled Swagger UI at `/swagger-ui/`. Tenant/business endpoints, OIDC, frontend, checking
-and email workers are not implemented.
+**Core monitoring implemented; not a complete or deployable subscription service.** The
+service persists normalized monitored URLs and development subscriptions, checks due sites
+asynchronously with SSRF controls, records hash-based change metadata, and coordinates
+workers with PostgreSQL leases and fencing. Site, subscription and change APIs are in
+OpenAPI; the business API is disabled by default and only available with explicit opt-in on
+a loopback bind. Tenant authentication, email verification/delivery, frontend, daily digest,
+and production onboarding are not implemented.
 
 ## Development
 Prerequisites: install Devbox, direnv with its shell hook enabled, and Docker Compose. The

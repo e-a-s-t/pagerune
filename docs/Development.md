@@ -92,6 +92,11 @@ direnv exec . docker compose down -v
 
 ## Implemented and planned functionality
 
-The application provides an Axum HTTP server, validated configuration, PostgreSQL pool, JSON logs, graceful shutdown, generated OpenAPI and bundled Swagger UI, `GET /healthz`, and `GET /readyz`. Readiness runs `SELECT 1`; migrations are applied explicitly and are not required at server startup.
+The application provides the Axum API, PostgreSQL persistence, generated OpenAPI/Swagger,
+health/readiness, monitored URL and subscription APIs, asynchronous site checks, hash-based
+change history, SSRF restrictions, and PostgreSQL leases with fencing. Migrations are
+applied explicitly. The business API is disabled unless `PAGERUNE_DEV_API_ENABLED=true`;
+that option requires the default loopback bind and is only for local development.
 
-The baseline migration creates no business schema. Subscription, tenant, OIDC, checking, digest, and email workflows are planned and are not implemented. In particular, no SMTP client or email sending exists; Mailpit is available to capture mail once sending is implemented.
+OIDC, tenant membership, subscriber verification, HTML UI, daily digest, SMTP delivery, and
+public change pages remain unimplemented. Mailpit is available for later mail integration.

@@ -30,9 +30,22 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     let bind = listener.local_addr()?;
     tracing::info!(%bind, "PageRune listening");
-    axum::serve(listener, app(AppState { database }))
+    let state = AppState {
+        database,
+        dev_api_enabled: config.dev_api_enabled,
+    };
+    let worker = tokio::spawn(pagerune::worker::run(
+        state.clone(),
+        pagerune::fetcher::FetchConfig {
+            timeout: Duration::from_secs(config.fetch_timeout_seconds),
+            max_body_bytes: config.max_response_bytes,
+        },
+    ));
+    let server_result = axum::serve(listener, app(state))
         .with_graceful_shutdown(shutdown_signal())
-        .await?;
+        .await;
+    worker.abort();
+    server_result?;
     Ok(())
 }
 

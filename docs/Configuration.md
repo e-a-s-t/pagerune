@@ -6,12 +6,15 @@
 | PAGERUNE_BIND | HTTP socket address | 127.0.0.1:8080 |
 | DATABASE_URL | PostgreSQL URL, including TLS settings | Required; PostgreSQL scheme only |
 | RUST_LOG | tracing filter | pagerune=info |
+| PAGERUNE_DEV_API_ENABLED | Enable temporary business APIs; requires loopback bind | false |
+| PAGERUNE_FETCH_TIMEOUT_SECONDS | Per-request HTTP timeout in seconds | 15 (range 1–120) |
+| PAGERUNE_MAX_RESPONSE_BYTES | Maximum fetched body size | 2097152 (range 1024–20971520) |
 
 Startup rejects malformed bind addresses, missing or invalid PostgreSQL URLs, and other
 database schemes. Configuration errors do not include URL credentials. The readiness probe
-executes SELECT 1. It does not validate migration or worker readiness. Database pool is
-currently capped at 5 connections per replica;
-make limits configurable during worker implementation and size against CNPG capacity.
+executes SELECT 1. It does not validate migration or worker readiness. The fetch worker
+uses a 180-second lease and retries failed requests within five minutes. The database pool
+is capped at five connections per replica; size total connections against CNPG capacity.
 
 ## Planned contract (not read by scaffold yet)
 | Variable | Meaning |
@@ -28,8 +31,7 @@ make limits configurable during worker implementation and size against CNPG capa
 | OIDC_AUDIENCE | Expected API access-token audience |
 | OIDC_REDIRECT_URL | Registered callback URL |
 
-Fetch concurrency, timeouts/body limits, job lease duration, retry/backoff bounds,
-retention and rate limits need validated settings when those components are implemented.
+Retention and rate limits need validated settings before public launch.
 Secrets are supplied via Kubernetes Secret or secret injection; never write them to
 ConfigMaps, examples, logs, or source. Validate configuration once at startup without
 printing sensitive values. Plaintext SMTP must be explicit, never a TLS-failure fallback.

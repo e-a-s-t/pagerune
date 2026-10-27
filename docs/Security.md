@@ -2,6 +2,13 @@
 
 These are required implementation controls, not features delivered by the scaffold.
 
+## Phase 2 development API
+The site/subscription business API is disabled by default. Enabling it requires
+`PAGERUNE_DEV_API_ENABLED=true` and a loopback `PAGERUNE_BIND`; configuration validation
+rejects any other bind. This is a temporary local-development safeguard, not authentication
+or tenant isolation. Do not expose the process through a proxy, tunnel, or public network.
+Subscriber identities are caller-supplied opaque labels and do not establish ownership.
+
 - SSO: OIDC code flow + PKCE, state and nonce; secure HttpOnly SameSite cookies.
   Sessions in PostgreSQL. CSRF protections on browser mutations including logout.
 - API: OAuth2 access tokens, strict issuer/audience/signature/expiry/algorithm validation,

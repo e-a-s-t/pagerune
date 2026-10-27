@@ -6,7 +6,17 @@ and workers. Multiple copies run as a Deployment. PostgreSQL is the durable coor
 and storage layer, managed separately by CloudNativePG. SMTP is an external protocol
 endpoint operated by the deployer; no SaaS is required.
 
-## Data model (planned; product schema not yet implemented)
+## Data model
+- Monitored site: UUID, original URL, normalized unique URL, configurable interval,
+  current hash/ETag/Last-Modified, last check/success timestamps and current status.
+- Subscription: monitored site + opaque subscriber identity. The identity is a development
+  association only; it is not proof of ownership or authorization.
+- Site change: stable UUID, detected time and previous/new SHA-256 hashes. No body snapshot
+  or public change page is stored or exposed in this phase.
+- Lease: owner UUID, expiry and monotonically increasing fencing generation stored on the
+  monitored site row. PostgreSQL is the scheduler and coordination store.
+
+The following tenant-oriented entities are planned for the authenticated phase:
 - Tenant and membership: customer boundary; membership maps trusted OIDC issuer + subject
   to tenant + role. One identity can have multiple explicit memberships.
 - Site: tenant ID, public slug, verified domain and ownership proof state.
@@ -28,7 +38,20 @@ objects; enforce site/watch consistency in schema and service queries. Global di
 assembly is an internal privileged workflow, not a tenant API. Never expose foreign
 customer subscriber details. Subscription verification and unsubscribe scopes are explicit.
 
-## Daily cycle and concurrency
+## Scheduling and concurrency
+1. Every replica polls PostgreSQL for due sites. A short transaction claims one due row
+   with `FOR UPDATE SKIP LOCKED`, sets a 180-second lease and increments its generation.
+2. The transaction commits before DNS resolution and HTTP fetching. HTTP timeout defaults
+   to 15 seconds and body size defaults to 2 MiB; both are configurable.
+3. Results apply only when the lease owner and generation still match and the lease has not
+   expired. Baseline/hash, change metadata, status, timestamps and next due time update in
+   one transaction. A crash leaves an expiring lease that another replica can reclaim.
+
+Default interval is 24 hours; site intervals range from five minutes to 30 days. A failed
+check retries after at most five minutes. This core phase does not implement daily digest
+cycles or email delivery.
+
+## Daily cycle and digest (planned)
 1. Any replica may create the scheduled cycle; a unique key prevents duplicates.
 2. Insert one check job for each eligible watch. Workers claim due jobs in a short
    transaction using `FOR UPDATE SKIP LOCKED`, then commit before network I/O.

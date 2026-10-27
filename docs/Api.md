@@ -1,14 +1,32 @@
 # API and UI contract
 
-## Current scaffold
+## Current implementation
 Generated OpenAPI: `GET /api/openapi.json`. Bundled Swagger UI: `GET /swagger-ui/`.
-Implemented operations only: `GET /healthz` (200), `GET /readyz` (200 or 503 based on
-PostgreSQL reachability). Error responses use `{code, message, request_id}` and do not
-include provider details. Unknown routes use the same error shape. Infrastructure and
-documentation routes are public. The OpenAPI document must never claim business routes are
-implemented before they are registered and secured.
+Operational routes: `GET /healthz` and `GET /readyz` (200 or 503 based on PostgreSQL).
+Business routes are under `/api/v1`. They are disabled by default. Set
+`PAGERUNE_DEV_API_ENABLED=true` only for development and bind `PAGERUNE_BIND` to loopback;
+startup rejects enabling this mode on a non-loopback bind. This temporary mode is not
+authentication and must not be exposed publicly. Error responses use
+`{code, message, request_id}` without provider details; `X-Request-ID` is returned.
+Collections use `page` (default 1) and `limit` (default 50, maximum 100).
 
-## Planned business APIs
+| Method | Route | Purpose |
+|---|---|---|
+| GET, POST | /api/v1/sites | List or register a monitored URL |
+| GET, PATCH, DELETE | /api/v1/sites/{id} | Retrieve, configure interval, or delete |
+| POST | /api/v1/sites/{site_id}/subscriptions | Subscribe an opaque development identity |
+| GET | /api/v1/subscriptions | List subscriptions for `subscriber_identity` |
+| GET, DELETE | /api/v1/subscriptions/{id} | Retrieve or delete, scoped to `subscriber_identity` |
+| GET | /api/v1/sites/{site_id}/changes | Paginated metadata history |
+| GET | /api/v1/changes/{id} | Retrieve a change by stable UUID |
+
+Site intervals range from 300 to 2,592,000 seconds. The default is 86,400 seconds. URL
+normalization lowercases the host, removes default ports and fragments, and preserves query
+and path semantics. The normalized URL has a unique database constraint. Change UUIDs are
+stable and suitable for a future public URL, but this phase does not publish public change
+pages or retain page snapshots.
+
+## Planned authenticated APIs
 All under `/api/v1`. Every implemented endpoint must define request/response schemas,
 stable operationId, validation errors, security requirements and tenant scope in Utoipa.
 Use UUIDs internally and stable site/watch slugs for public links. Error JSON uses code,

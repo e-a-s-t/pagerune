@@ -24,6 +24,16 @@ one daily combined message if any selected pages changed.
 - Persist lightweight cycle change metadata and pending deliveries for reliable retries.
 - Future channels are extension points; email is the only MVP channel.
 
+## Phase 2 core monitoring behavior
+- A monitored URL is normalized and stored once; subscriptions to equivalent URLs share it.
+- Checks use per-site intervals (24-hour default, five-minute minimum) and PostgreSQL
+  leases/fencing across replicas. The daily digest schedule remains a separate later feature.
+- Current content hashes and lightweight change records are retained; page snapshots and
+  public change pages remain out of scope. Change records have stable UUIDs for future URLs.
+- Until authentication is delivered, the business API is disabled by default and can only
+  be enabled for development on a loopback bind. Subscriber identities are opaque labels,
+  not authentication credentials.
+
 ## Selection and links
 A site has a stable public slug, e.g. `/allmaningen/`.
 Supported preselection: `?all=true`, `?watch=nyheter`, and repeated `watch` parameters.
