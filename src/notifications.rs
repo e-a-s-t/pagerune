@@ -3,6 +3,8 @@ use lettre::{
     message::{Mailbox, MultiPart, SinglePart, header::ContentType},
     transport::smtp::{authentication::Credentials, client::Tls},
 };
+use rand::Rng;
+use sha2::{Digest, Sha256};
 use sqlx::FromRow;
 use std::{env, time::Duration};
 use tokio::task::JoinSet;
@@ -19,6 +21,8 @@ pub struct SmtpConfig {
     pub from_email: String,
     pub from_name: String,
     pub timeout: Duration,
+    pub public_base_url: String,
+    pub template_dir: String,
 }
 
 impl std::fmt::Debug for SmtpConfig {
@@ -31,6 +35,7 @@ impl std::fmt::Debug for SmtpConfig {
             .field("from_email", &self.from_email)
             .field("from_name", &self.from_name)
             .field("timeout", &self.timeout)
+            .field("template_dir", &self.template_dir)
             .finish()
     }
 }
@@ -46,6 +51,10 @@ impl Default for SmtpConfig {
             from_email: "updates@localhost".into(),
             from_name: "PageRune".into(),
             timeout: Duration::from_secs(15),
+            public_base_url: env::var("PAGERUNE_PUBLIC_BASE_URL")
+                .unwrap_or_else(|_| "http://localhost:8080".into()),
+            template_dir: env::var("PAGERUNE_EMAIL_TEMPLATE_DIR")
+                .unwrap_or_else(|_| "templates/email".into()),
         }
     }
 }
@@ -95,6 +104,7 @@ impl SmtpConfig {
 struct Delivery {
     id: Uuid,
     change_id: Uuid,
+    subscription_id: Uuid,
     recipient: String,
     site_url: String,
     detected_at: chrono::DateTime<chrono::Utc>,
@@ -148,13 +158,22 @@ async fn claim_for_site(
     site_id: Option<Uuid>,
 ) -> Result<Option<Delivery>, sqlx::Error> {
     let owner = Uuid::new_v4();
-    sqlx::query_as::<_,Delivery>("WITH due AS (SELECT o.id, (o.status='sending') AS recovered FROM notification_outbox o JOIN subscriptions s ON s.id=o.subscription_id JOIN site_changes c ON c.id=o.change_id WHERE o.status IN ('pending','sending') AND o.next_attempt_at<=now() AND (o.lease_expires_at IS NULL OR o.lease_expires_at<=now()) AND ($2::uuid IS NULL OR c.site_id=$2) ORDER BY o.next_attempt_at,o.created_at FOR UPDATE OF o SKIP LOCKED LIMIT 1) UPDATE notification_outbox o SET status='sending', lease_owner=$1, lease_expires_at=now()+interval '180 seconds', lease_generation=o.lease_generation+1, attempt_count=o.attempt_count+1 FROM due d,site_changes c,monitored_sites m WHERE o.id=d.id AND c.id=o.change_id AND m.id=c.site_id RETURNING o.id,o.change_id,o.recipient,c.detected_at,m.original_url AS site_url,o.lease_owner,o.lease_generation,o.attempt_count,d.recovered")
+    sqlx::query_as::<_,Delivery>("WITH due AS (SELECT o.id, (o.status='sending') AS recovered FROM notification_outbox o JOIN subscriptions s ON s.id=o.subscription_id JOIN site_changes c ON c.id=o.change_id WHERE o.status IN ('pending','sending') AND o.next_attempt_at<=now() AND (o.lease_expires_at IS NULL OR o.lease_expires_at<=now()) AND ($2::uuid IS NULL OR c.site_id=$2) ORDER BY o.next_attempt_at,o.created_at FOR UPDATE OF o SKIP LOCKED LIMIT 1) UPDATE notification_outbox o SET status='sending', lease_owner=$1, lease_expires_at=now()+interval '180 seconds', lease_generation=o.lease_generation+1, attempt_count=o.attempt_count+1 FROM due d,site_changes c,monitored_sites m WHERE o.id=d.id AND c.id=o.change_id AND m.id=c.site_id RETURNING o.id,o.change_id,o.subscription_id,o.recipient,c.detected_at,m.original_url AS site_url,o.lease_owner,o.lease_generation,o.attempt_count,d.recovered")
         .bind(owner).bind(site_id).fetch_optional(pool).await
 }
 
 async fn deliver(pool: sqlx::PgPool, config: SmtpConfig, job: Delivery, max_attempts: i32) {
     tracing::info!(notification_id=%job.id, change_id=%job.change_id, attempt=job.attempt_count, "SMTP delivery attempt");
-    let result = send(&config, &job).await;
+    let active =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM subscriptions WHERE id=$1)")
+            .bind(job.subscription_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(false);
+    if !active {
+        return;
+    }
+    let result = send(&pool, &config, &job).await;
     match result {
         Ok(()) => {
             let done=sqlx::query("UPDATE notification_outbox SET status='delivered',delivered_at=now(),lease_owner=NULL,lease_expires_at=NULL,last_error=NULL WHERE id=$1 AND status='sending' AND lease_owner=$2 AND lease_generation=$3 AND lease_expires_at>now()")
@@ -188,7 +207,11 @@ fn rand_jitter(id: Uuid, attempt: i32, base: u64) -> u64 {
     base.saturating_mul(75 + ((bytes[0] as u64 + attempt as u64) % 51)) / 100
 }
 
-async fn send(c: &SmtpConfig, j: &Delivery) -> Result<(), (&'static str, bool)> {
+async fn send(
+    pool: &sqlx::PgPool,
+    c: &SmtpConfig,
+    j: &Delivery,
+) -> Result<(), (&'static str, bool)> {
     let from: Mailbox = format!("{} <{}>", c.from_name, c.from_email)
         .parse()
         .map_err(|_| ("invalid_sender_address", true))?;
@@ -196,12 +219,51 @@ async fn send(c: &SmtpConfig, j: &Delivery) -> Result<(), (&'static str, bool)> 
         .recipient
         .parse()
         .map_err(|_| ("invalid_recipient_address", true))?;
-    let text = templates::plain(j.change_id, j.detected_at, &j.site_url);
-    let html = templates::html(j.change_id, j.detected_at, &j.site_url);
+    let mut token_bytes = [0u8; 32];
+    rand::rng().fill(&mut token_bytes);
+    let token = hex::encode(token_bytes);
+    let token_hash = hex::encode(Sha256::digest(token.as_bytes()));
+    sqlx::query("INSERT INTO unsubscribe_tokens(token_hash,subscription_id) VALUES($1,$2)")
+        .bind(&token_hash)
+        .bind(j.subscription_id)
+        .execute(pool)
+        .await
+        .map_err(|_| ("unsubscribe_token_store_failed", false))?;
+    let unsubscribe_url = format!(
+        "{}/unsubscribe/{}",
+        c.public_base_url.trim_end_matches('/'),
+        token
+    );
+    let html = templates::render(
+        &c.template_dir,
+        "change.html",
+        j.change_id,
+        j.detected_at,
+        &j.site_url,
+        &unsubscribe_url,
+    )
+    .map_err(|_| ("email_template_invalid", true))?;
+    let text = templates::render(
+        &c.template_dir,
+        "change.txt",
+        j.change_id,
+        j.detected_at,
+        &j.site_url,
+        &unsubscribe_url,
+    )
+    .map_err(|_| ("email_template_invalid", true))?;
     let email = Message::builder()
         .from(from)
         .to(to)
         .subject("A monitored PageRune website changed")
+        .raw_header(lettre::message::header::HeaderValue::new(
+            lettre::message::header::HeaderName::new_from_ascii_str("List-Unsubscribe"),
+            format!("<{unsubscribe_url}>"),
+        ))
+        .raw_header(lettre::message::header::HeaderValue::new(
+            lettre::message::header::HeaderName::new_from_ascii_str("List-Unsubscribe-Post"),
+            "List-Unsubscribe=One-Click".into(),
+        ))
         .message_id(Some(format!("<{}@pagerune>", j.id)))
         .multipart(
             MultiPart::alternative()
@@ -217,6 +279,15 @@ async fn send(c: &SmtpConfig, j: &Delivery) -> Result<(), (&'static str, bool)> 
                 ),
         )
         .map_err(|_| ("message_build_failed", true))?;
+    let still_active =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM subscriptions WHERE id=$1)")
+            .bind(j.subscription_id)
+            .fetch_one(pool)
+            .await
+            .map_err(|_| ("subscription_check_failed", false))?;
+    if !still_active {
+        return Ok(());
+    }
     let mut builder = match c.tls_mode.as_str() {
         "implicit" => AsyncSmtpTransport::<Tokio1Executor>::relay(&c.host)
             .map_err(|_| ("smtp_configuration_failed", false))?,
@@ -249,30 +320,31 @@ async fn send(c: &SmtpConfig, j: &Delivery) -> Result<(), (&'static str, bool)> 
 
 pub mod templates {
     use chrono::{DateTime, Utc};
+    use minijinja::{Environment, context};
+    use std::fs;
     use uuid::Uuid;
-    pub fn plain(id: Uuid, date: DateTime<Utc>, url: &str) -> String {
-        format!(
-            "PageRune website update\n\nA change was detected at {}.\nWebsite: {}\nChange ID: {}\n",
-            date.to_rfc3339(),
-            url,
-            id
-        )
-    }
-    pub fn html(id: Uuid, date: DateTime<Utc>, url: &str) -> String {
-        let safe = escape(url);
-        format!(
-            "<!doctype html><html><body><h1>PageRune website update</h1><p>A change was detected at {}</p><p><a href=\"{}\">Visit the monitored website</a></p><p>Change ID: <code>{}</code></p></body></html>",
-            date.to_rfc3339(),
-            safe,
-            id
-        )
-    }
-    fn escape(s: &str) -> String {
-        s.replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('"', "&quot;")
-            .replace('\'', "&#39;")
+    pub fn render(
+        dir: &str,
+        name: &str,
+        id: Uuid,
+        date: DateTime<Utc>,
+        url: &str,
+        unsubscribe_url: &str,
+    ) -> anyhow::Result<String> {
+        let fallback = match name {
+            "change.html" => include_str!("../templates/email/change.html"),
+            "change.txt" => include_str!("../templates/email/change.txt"),
+            _ => anyhow::bail!("unknown template"),
+        };
+        let path = std::path::Path::new(dir).join(name);
+        let source = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => fallback.to_owned(),
+            Err(e) => return Err(e.into()),
+        };
+        let mut env = Environment::new();
+        env.add_template(name, &source)?;
+        Ok(env.get_template(name)?.render(context! { site_url => url, site_name => url, detected_at => date.format("%Y-%m-%d %H:%M UTC").to_string(), change_id => id.to_string(), unsubscribe_url => unsubscribe_url, application_name => "PageRune" })?)
     }
 }
 
@@ -307,12 +379,28 @@ mod tests {
     fn alternatives_include_brand_source_timestamp_and_stable_change_id() {
         let id = Uuid::new_v4();
         let date = Utc::now();
-        let plain = templates::plain(id, date, "https://example.test/page");
-        let html = templates::html(id, date, "https://example.test/page");
+        let plain = templates::render(
+            "templates/email",
+            "change.txt",
+            id,
+            date,
+            "https://example.test/page",
+            "https://pagerune.test/unsubscribe/abc",
+        )
+        .unwrap();
+        let html = templates::render(
+            "templates/email",
+            "change.html",
+            id,
+            date,
+            "https://example.test/page",
+            "https://pagerune.test/unsubscribe/abc",
+        )
+        .unwrap();
         for content in [plain, html] {
             assert!(content.contains("PageRune"));
-            assert!(content.contains("https://example.test/page"));
-            assert!(content.contains(&date.to_rfc3339()));
+            assert!(content.contains("example.test"), "{content}");
+            assert!(content.contains(&date.format("%Y-%m-%d %H:%M UTC").to_string()));
             assert!(content.contains(&id.to_string()));
             assert!(!content.contains("snapshot"));
         }
@@ -320,14 +408,49 @@ mod tests {
 
     #[test]
     fn html_escapes_url_attribute_content() {
-        let html = templates::html(
+        let html = templates::render(
+            "templates/email",
+            "change.html",
             Uuid::new_v4(),
             Utc::now(),
             "https://example.test/?a=1&b=\"x\"",
-        );
+            "https://pagerune.test/unsubscribe/a&b",
+        )
+        .unwrap();
         assert!(html.contains("&amp;"));
         assert!(html.contains("&quot;"));
         assert!(!html.contains("?a=1&b=\"x\""));
+    }
+
+    #[test]
+    fn missing_template_uses_bundle_and_invalid_template_errors() {
+        let id = Uuid::new_v4();
+        let date = Utc::now();
+        let fallback = templates::render(
+            "/definitely/missing/pagerune-templates",
+            "change.txt",
+            id,
+            date,
+            "https://example.test",
+            "https://pagerune.test/unsubscribe/token",
+        )
+        .unwrap();
+        assert!(fallback.contains("PageRune"));
+        let dir = std::env::temp_dir().join(format!("pagerune-template-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("change.txt"), "{% if broken %}").unwrap();
+        assert!(
+            templates::render(
+                dir.to_str().unwrap(),
+                "change.txt",
+                id,
+                date,
+                "https://example.test",
+                "https://pagerune.test/unsubscribe/token"
+            )
+            .is_err()
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
@@ -415,6 +538,7 @@ mod tests {
         let job = Delivery {
             id: notification,
             change_id: change,
+            subscription_id: subscription,
             recipient: "pagerune-test@example.test".into(),
             site_url: format!("https://example.test/{site}"),
             detected_at: Utc::now(),
@@ -447,6 +571,7 @@ mod tests {
         let mut job = Delivery {
             id: Uuid::new_v4(),
             change_id: Uuid::new_v4(),
+            subscription_id: Uuid::new_v4(),
             recipient: "not-an-email".into(),
             site_url: "https://example.test/".into(),
             detected_at: Utc::now(),
@@ -455,14 +580,23 @@ mod tests {
             attempt_count: 1,
             recovered: false,
         };
-        let (code, permanent) = send(&config, &job).await.unwrap_err();
+        let (code, permanent) = send(&database().await, &config, &job).await.unwrap_err();
         assert_eq!(code, "invalid_recipient_address");
         assert!(permanent);
         job.recipient = "pagerune-test@example.test".into();
+        let pool = database().await;
+        let site = Uuid::new_v4();
+        sqlx::query("INSERT INTO monitored_sites(id,original_url,normalized_url) VALUES($1,$2,$2)")
+            .bind(site)
+            .bind(format!("https://example.test/{site}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO subscriptions(id,site_id,subscriber_identity) VALUES($1,$2,'pagerune-test@example.test')").bind(job.subscription_id).bind(site).execute(&pool).await.unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         config.port = listener.local_addr().unwrap().port();
         drop(listener);
-        let (code, permanent) = send(&config, &job).await.unwrap_err();
+        let (code, permanent) = send(&pool, &config, &job).await.unwrap_err();
         assert_eq!(code, "smtp_transport_failure");
         assert!(!permanent);
     }
@@ -491,6 +625,7 @@ mod tests {
             let job = Delivery {
                 id: notification,
                 change_id: change,
+                subscription_id: subscription,
                 recipient: recipient.into(),
                 site_url: format!("https://example.test/{site}"),
                 detected_at: Utc::now(),

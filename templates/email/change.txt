@@ -1,0 +1,8 @@
+{{ application_name }} website update
+
+A change was detected for {{ site_url }}.
+Detected: {{ detected_at }}
+Change ID: {{ change_id }}
+
+Visit monitored website: {{ site_url }}
+Unsubscribe: {{ unsubscribe_url }}

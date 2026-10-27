@@ -3,6 +3,12 @@
 Status: Accepted means agreed product constraints or the scaffold's technical approach.
 Proposed defaults require confirmation before being represented as settled product policy.
 
+Phase 3 decision: use MiniJinja with external, bundled-default HTML and text notification
+templates, loaded from a configurable directory for each send. Issue one 256-bit
+unsubscribe token per notification and store only its SHA-256 hash. This keeps all
+previously emailed links valid without persisting recoverable tokens. GET is confirmation
+only; browser and RFC 8058 POST remove the matching subscription.
+
 | ID | Status | Decision | Rationale / consequence |
 |---|---|---|---|
 | ADR-001 | Accepted | Rust, Axum and Tokio; one application | Small service and a single operational unit. |

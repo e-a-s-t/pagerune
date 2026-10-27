@@ -19,6 +19,8 @@ Collections use `page` (default 1) and `limit` (default 50, maximum 100).
 | GET, DELETE | /api/v1/subscriptions/{id} | Retrieve or delete, scoped to `subscriber_identity` |
 | GET | /api/v1/sites/{site_id}/changes | Paginated metadata history |
 | GET | /api/v1/changes/{id} | Retrieve a change by stable UUID |
+| GET | /unsubscribe/{token} | Display confirmation only; never changes subscription state |
+| POST | /unsubscribe/{token} | Browser confirmation or RFC 8058 form post; disables that subscription |
 
 Site intervals range from 300 to 2,592,000 seconds. The default is 86,400 seconds. URL
 normalization lowercases the host, removes default ports and fragments, and preserves query
@@ -58,6 +60,9 @@ sites cannot publish active watches. No public endpoint reveals whether an email
 GET never confirms, unsubscribes or otherwise mutates state. A mail link opens a form;
 POST performs the action. Do not send tokens in query-string API calls: forms exchange
 link tokens for narrowly scoped state; scrub token-bearing URLs and use no-referrer.
+The unsubscribe route is public and requires no session, cookie, or CSRF token; it accepts
+standard form-encoded RFC 8058 one-click POSTs. Unknown and already-used tokens receive a
+generic completion response.
 
 ## Planned HTML routes
 - `/{site_slug}/`: subscription form, query preselection `all=true` or repeated `watch`.

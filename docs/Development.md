@@ -6,6 +6,12 @@
 - [direnv](https://direnv.net/) with its shell hook enabled, so application settings are loaded into your shell.
 - Docker Compose and a running compatible container engine for PostgreSQL and Mailpit.
 
+## Email templates
+Edit `templates/email/change.html` and `templates/email/change.txt` while the app runs;
+the next notification uses those changes without recompilation or restart. Inspect
+multipart messages in Mailpit at `http://127.0.0.1:8025`. Set `PAGERUNE_PUBLIC_BASE_URL`
+in `.env` to the origin used for unsubscribe links.
+
 The Rust application runs on the host through Devbox. Only PostgreSQL and Mailpit run in containers. Devbox does not provide a container engine.
 
 ## Initial setup

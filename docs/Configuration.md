@@ -26,7 +26,14 @@ is capped at five connections per replica; size total connections against CNPG c
 | SMTP_TIMEOUT_SECONDS | Connection/operation timeout | 15 (range 1–120) |
 | PAGERUNE_NOTIFICATION_CONCURRENCY | Maximum in-flight deliveries per replica | 2 (range 1–32) |
 | PAGERUNE_NOTIFICATION_MAX_ATTEMPTS | Attempts before terminal failure | 8 (range 1–20) |
-| PAGERUNE_PUBLIC_BASE_URL | Reserved for future PageRune links | http://localhost:8080 |
+| PAGERUNE_PUBLIC_BASE_URL | Public origin for unsubscribe URLs | http://localhost:8080 |
+| PAGERUNE_EMAIL_TEMPLATE_DIR | Directory containing `change.html` and `change.txt` | templates/email |
+
+Email templates use MiniJinja variables `site_url`, `site_name`, `detected_at`,
+`change_id`, `unsubscribe_url`, and `application_name`. Bundled files are defaults.
+Template files are read for each email, so edits apply without recompilation or restart.
+Missing files fall back to bundled defaults; unreadable or invalid templates fail delivery.
+HTML variables are autoescaped.
 
 ## Planned contract
 | Variable | Meaning |

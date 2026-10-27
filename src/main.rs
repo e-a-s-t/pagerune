@@ -33,6 +33,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         database,
         dev_api_enabled: config.dev_api_enabled,
+        public_base_url: config.public_base_url.clone(),
     };
     let worker = tokio::spawn(pagerune::worker::run(
         state.clone(),

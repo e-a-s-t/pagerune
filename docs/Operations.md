@@ -6,6 +6,15 @@ TLS termination. No application PVC. CNPG-managed PostgreSQL has its own storage
 backup and recovery lifecycle. SMTP is configured independently. Example manifests in
 deploy/ are starting points only: not a complete production installation.
 
+## Email templates and unsubscribe
+Mount customized `change.html` and `change.txt` files in the directory selected by
+`PAGERUNE_EMAIL_TEMPLATE_DIR` (default `templates/email`). Files are read per notification,
+so changes apply without a restart. Missing files use bundled defaults; unreadable or
+invalid files fail delivery as a permanent template error. A message already in SMTP
+delivery when an unsubscribe completes may still be accepted and cannot be recalled. Set
+`PAGERUNE_PUBLIC_BASE_URL` to the externally reachable HTTPS origin. Token hashes cascade
+with subscription deletion.
+
 A transaction-pool proxy needs careful review if advisory locks are ever used; this
 architecture instead uses persisted job leases and row locking in short transactions.
 Account for pool connections per replica and graceful termination when autoscaling.

@@ -21,6 +21,11 @@ a local capture server. OIDC tests use controlled discovery/JWKS and invalid-tok
 | MAIL-05 | SMTP success to local capture server | Multipart plain-text/HTML message is accepted by Mailpit | SMTP integration / IMPLEMENTED |
 | MAIL-06 | Temporary/permanent SMTP rejection and retry limit | Backoff retry or terminal failure is recorded without logging body/secrets | SMTP integration |
 | MAIL-07 | Worker shutdown/restart | Active send drains; expired work is recoverable after restart | PostgreSQL + SMTP integration |
+| MAIL-08 | HTML and text templates render shared variables and escape untrusted values | Both alternatives contain source/change/unsubscribe details; no source HTML is rendered | Unit / IMPLEMENTED |
+| MAIL-09 | Missing or syntactically invalid template | Missing file uses bundled default; invalid template is reported as terminal template failure | Unit / IMPLEMENTED |
+| SUB-10 | Unsubscribe GET, invalid token, repeated browser/one-click POST | GET is read-only; invalid token does not affect a subscription; POST is idempotent and removes only the matching subscription | HTTP + PostgreSQL / IMPLEMENTED |
+| MAIL-10 | Unsubscribe races with pending or in-flight delivery | Pending outbox work is cascaded; delivery checks subscription before SMTP; accepted mail cannot be recalled | PostgreSQL + SMTP |
+| MAIL-11 | Captured email headers and body in Mailpit | Multipart HTML/text and RFC 8058 headers are present | SMTP integration / IMPLEMENTED |
 | MON-02 | Failed fetch after baseline | Baseline remains unchanged and a stable error is recorded | PostgreSQL worker integration / IMPLEMENTED |
 | SEC-05 | Private/loopback/metadata destination | Fetch is rejected before connecting | Unit + local HTTP / IMPLEMENTED |
 | API-02 | Malformed JSON and disabled business API | Structured JSON error with request ID | HTTP integration / IMPLEMENTED |

@@ -3,6 +3,7 @@ use axum::{
     http::{Method, Request, StatusCode},
 };
 use pagerune::{AppState, app};
+use sha2::{Digest, Sha256};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::{env, time::Duration};
 use tower::ServiceExt;
@@ -37,10 +38,91 @@ async fn response(uri: &str, database: PgPool) -> axum::response::Response {
     app(AppState {
         database,
         dev_api_enabled: true,
+        public_base_url: "http://localhost:8080".into(),
     })
     .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
     .await
     .unwrap()
+}
+
+#[tokio::test]
+async fn unsubscribe_get_is_read_only_and_post_is_idempotent() {
+    let pool = connected_database().await;
+    let site = Uuid::new_v4();
+    let subscription = Uuid::new_v4();
+    let sibling_subscription = Uuid::new_v4();
+    let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let hash = hex::encode(Sha256::digest(token.as_bytes()));
+    sqlx::query("INSERT INTO monitored_sites(id,original_url,normalized_url) VALUES($1,$2,$2)")
+        .bind(site)
+        .bind(format!("https://unsubscribe.example/{site}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO subscriptions(id,site_id,subscriber_identity) VALUES($1,$2,'private@example.test')").bind(subscription).bind(site).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO subscriptions(id,site_id,subscriber_identity) VALUES($1,$2,'other@example.test')").bind(sibling_subscription).bind(site).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO unsubscribe_tokens(token_hash,subscription_id) VALUES($1,$2)")
+        .bind(hash)
+        .bind(subscription)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let uri = format!("/unsubscribe/{token}");
+    assert_eq!(
+        response("/unsubscribe/not-a-token", pool.clone())
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let get = response(&uri, pool.clone()).await;
+    assert_eq!(get.status(), StatusCode::OK);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM subscriptions WHERE id=$1")
+            .bind(subscription)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+    for _ in 0..2 {
+        let result = app(AppState {
+            database: pool.clone(),
+            dev_api_enabled: false,
+            public_base_url: "http://localhost:8080".into(),
+        })
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(&uri)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("List-Unsubscribe=One-Click"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.status(), StatusCode::OK);
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM subscriptions WHERE id=$1")
+            .bind(subscription)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM subscriptions WHERE id=$1")
+            .bind(sibling_subscription)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+    sqlx::query("DELETE FROM monitored_sites WHERE id=$1")
+        .bind(site)
+        .execute(&pool)
+        .await
+        .unwrap();
 }
 
 async fn request(
@@ -60,6 +142,7 @@ async fn request(
     app(AppState {
         database,
         dev_api_enabled: true,
+        public_base_url: "http://localhost:8080".into(),
     })
     .oneshot(builder.body(body).unwrap())
     .await
@@ -156,6 +239,7 @@ async fn development_api_is_disabled_unless_explicitly_enabled() {
     let response = app(AppState {
         database,
         dev_api_enabled: false,
+        public_base_url: "http://localhost:8080".into(),
     })
     .oneshot(
         Request::builder()
@@ -362,6 +446,7 @@ async fn malformed_json_uses_consistent_error_shape() {
     let response = app(AppState {
         database,
         dev_api_enabled: true,
+        public_base_url: "http://localhost:8080".into(),
     })
     .oneshot(
         Request::builder()

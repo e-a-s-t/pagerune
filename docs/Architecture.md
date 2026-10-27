@@ -100,3 +100,13 @@ Only one current normalized body/hash per watch. Cycle metadata and immutable di
 payloads remain until their defined retention period; redact/purge addresses and token
 material on deletion. No original raw HTML archive. Version normalization rules explicitly:
 a selector/normalization change triggers a silent rebaseline rather than a false update.
+
+## Email templates and unsubscribe
+Notification content is rendered from external MiniJinja HTML and text templates with
+bundled defaults. The shared context contains only the monitored URL, detection time,
+change ID, application name and unsubscribe URL; monitored page HTML is never included.
+HTML variables are autoescaped. Files are re-read for each send, so changes apply without
+a restart. Each notification receives an independent 256-bit random token. Only its
+SHA-256 hash is stored in `unsubscribe_tokens`; token rows cascade on subscription removal.
+GET displays confirmation; POST deletes that subscription and cascades its pending outbox
+work. RFC 8058 one-click POST uses the same token endpoint.

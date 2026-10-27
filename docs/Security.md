@@ -37,3 +37,9 @@ credentials are read from environment injection and never included in tracing fi
 Delivery remains at-least-once across the SMTP-acceptance/database-commit ambiguity.
 
 Owner must select retention periods, privacy notice and license before public launch.
+
+Unsubscribe tokens are random, per-message bearer capabilities. Only SHA-256 digests are
+stored; raw tokens and token URLs must not be logged. The public unsubscribe route returns
+generic responses and scopes deletion through the token digest. GET is read-only. POST
+accepts RFC 8058 form data without cookies or CSRF state. Email templates receive trusted
+metadata only; monitored page HTML is never rendered, and HTML values are autoescaped.

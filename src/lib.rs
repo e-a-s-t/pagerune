@@ -8,12 +8,14 @@ use axum::{
     Json, Router,
     body::{Body, to_bytes},
     extract::State,
+    extract::{Form, Path},
     http::{HeaderValue, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
 };
 use serde::Serialize;
+use sha2::Digest;
 use sqlx::PgPool;
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
@@ -23,6 +25,7 @@ use uuid::Uuid;
 pub struct AppState {
     pub database: PgPool,
     pub dev_api_enabled: bool,
+    pub public_base_url: String,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -127,10 +130,46 @@ async fn normalize_api_response(response: Response) -> Response {
     Response::from_parts(parts, Body::from(bytes))
 }
 
+#[utoipa::path(get, path = "/unsubscribe/{token}", tag = "Subscriptions", params(("token" = String, Path)), responses((status = 200, description = "Confirmation page; no state change"), (status = 404, description = "Invalid or expired token")))]
+async fn unsubscribe_confirm(Path(token): Path<String>, State(state): State<AppState>) -> Response {
+    let hash = hex::encode(sha2::Sha256::digest(token.as_bytes()));
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM unsubscribe_tokens WHERE token_hash=$1 AND revoked_at IS NULL AND EXISTS(SELECT 1 FROM subscriptions s WHERE s.id=unsubscribe_tokens.subscription_id))")
+        .bind(hash).fetch_one(&state.database).await.unwrap_or(false);
+    if !exists {
+        return (
+            StatusCode::NOT_FOUND,
+            "This unsubscribe link is invalid or expired.",
+        )
+            .into_response();
+    }
+    let mut response =
+        axum::response::Html(include_str!("../templates/email/unsubscribe.html").replace(
+            "<form method=\"post\">",
+            "<form method=\"post\"><input type=\"hidden\" name=\"unsubscribe\" value=\"confirm\">",
+        ))
+        .into_response();
+    response
+        .headers_mut()
+        .insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    response
+        .headers_mut()
+        .insert("cache-control", HeaderValue::from_static("no-store"));
+    response
+}
+
+#[utoipa::path(post, path = "/unsubscribe/{token}", tag = "Subscriptions", params(("token" = String, Path)), responses((status = 200, description = "Notifications disabled; safe to repeat"), (status = 500, description = "Request failed")))]
+async fn unsubscribe_post(
+    Path(token): Path<String>,
+    State(state): State<AppState>,
+    Form(_form): Form<std::collections::HashMap<String, String>>,
+) -> Response {
+    unsubscribe(&state.database, &token).await
+}
+
 #[derive(OpenApi)]
 #[openapi(
     info(title = "PageRune", version = "0.2.0", description = "Core monitoring API. Business routes require the loopback-only development API gate until authentication is implemented."),
-    paths(healthz, readyz,
+    paths(healthz, readyz, unsubscribe_confirm, unsubscribe_post,
         api::create_site, api::list_sites, api::get_site, api::update_site, api::delete_site,
         api::create_subscription, api::list_subscriptions, api::get_subscription, api::delete_subscription,
         api::list_changes, api::get_change),
@@ -144,8 +183,30 @@ pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
+        .route(
+            "/unsubscribe/{token}",
+            get(unsubscribe_confirm).post(unsubscribe_post),
+        )
         .merge(business)
         .fallback(not_found)
         .merge(SwaggerUi::new("/swagger-ui").url("/api/openapi.json", ApiDoc::openapi()))
         .with_state(state)
+}
+
+async fn unsubscribe(pool: &PgPool, token: &str) -> Response {
+    use sha2::Digest;
+    let hash = hex::encode(sha2::Sha256::digest(token.as_bytes()));
+    let result = sqlx::query("DELETE FROM subscriptions WHERE id=(SELECT subscription_id FROM unsubscribe_tokens WHERE token_hash=$1 AND revoked_at IS NULL)")
+        .bind(hash).execute(pool).await;
+    let mut response = match result {
+        Ok(_) => axum::response::Html("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Unsubscribed</title><h1>Notifications disabled</h1><p>This subscription will no longer receive notifications.</p></html>").into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Request could not be completed").into_response(),
+    };
+    response
+        .headers_mut()
+        .insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    response
+        .headers_mut()
+        .insert("cache-control", HeaderValue::from_static("no-store"));
+    response
 }

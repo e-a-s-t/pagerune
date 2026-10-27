@@ -5,7 +5,7 @@ and visitors subscribe to all updates or selected topics. Pages are checked once
 before a daily combined digest. Update links go directly to the original pages.
 
 ## Status
-**Core monitoring and email notifications implemented; not a complete or deployable subscription service.** The
+**Core monitoring, customizable HTML/text email, and secure unsubscribe implemented; not a complete or deployable subscription service.** The
 service persists normalized monitored URLs and development subscriptions, checks due sites
 asynchronously with SSRF controls, records hash-based change metadata, queues one email per
 active subscription in a PostgreSQL transactional outbox, and coordinates monitoring and

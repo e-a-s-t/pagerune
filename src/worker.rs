@@ -181,6 +181,7 @@ mod tests {
         let state = AppState {
             database: pool.clone(),
             dev_api_enabled: false,
+            public_base_url: "http://localhost:8080".into(),
         };
 
         let (left, right) = tokio::join!(claim(&pool), claim(&pool));
