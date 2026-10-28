@@ -220,7 +220,7 @@ async fn public_subscription_verification_and_management_are_site_scoped() {
             .to_vec(),
     )
     .unwrap();
-    assert!(html.contains(&url), "{html}");
+    assert!(html.contains(&url.replace('/', "&#x2f;")), "{html}");
     let csrf = hidden_value(&html, "csrf");
     let body = form_body(&[
         ("email", &email),
@@ -347,6 +347,29 @@ async fn public_subscription_verification_and_management_are_site_scoped() {
         StatusCode::OK
     );
 
+    sqlx::query("UPDATE monitored_sites SET public_subscriptions_enabled=false WHERE id=$1")
+        .bind(site_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        response(&format!("/subscribe/{site_id}"), pool.clone())
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM subscriptions WHERE id=$1 AND status='active'"
+        )
+        .bind(subscription_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1,
+        "disabling new enrollment preserves the existing subscriber"
+    );
+
     let manage = response("/manage", pool.clone()).await;
     let manage_html = String::from_utf8(
         axum::body::to_bytes(manage.into_body(), usize::MAX)
@@ -410,7 +433,7 @@ async fn public_subscription_verification_and_management_are_site_scoped() {
             .to_vec(),
     )
     .unwrap();
-    assert!(managed_html.contains(&url));
+    assert!(managed_html.contains(&url.replace('/', "&#x2f;")));
     let session_csrf = hidden_value(&managed_html, "csrf");
     let unsubscribe_body = form_body(&[("csrf", &session_csrf)]);
     let removed = form_request(
@@ -430,6 +453,7 @@ async fn public_subscription_verification_and_management_are_site_scoped() {
             .unwrap(),
         0
     );
+
     sqlx::query("DELETE FROM monitored_sites WHERE id=$1")
         .bind(site_id)
         .execute(&pool)
@@ -611,6 +635,480 @@ async fn openapi_documents_every_implemented_operation() {
 }
 
 #[tokio::test]
+async fn management_landing_is_separate_from_public_subscriber_management() {
+    let pool = connected_database().await;
+    let management_response = response("/management", pool.clone()).await;
+    assert_eq!(management_response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(management_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Registered websites"));
+    assert!(html.contains("Register a website"));
+    assert!(html.contains("/oauth2/sign_out"));
+
+    let subscriber_management = response("/manage", pool).await;
+    assert_eq!(subscriber_management.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn disabled_subscription_link_does_not_accept_a_new_subscription() {
+    let pool = connected_database().await;
+    let site_id = Uuid::new_v4();
+    let source_url = format!("https://disabled-enrollment.example/{site_id}");
+    sqlx::query("INSERT INTO monitored_sites(id,original_url,normalized_url,public_subscriptions_enabled) VALUES($1,$2,$2,false)")
+        .bind(site_id)
+        .bind(source_url)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let csrf = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let csrf_hash = hex::encode(Sha256::digest(csrf.as_bytes()));
+    sqlx::query("INSERT INTO web_form_nonces(token_hash,purpose,site_id,expires_at) VALUES($1,'subscribe',$2,now()+interval '20 minutes')")
+        .bind(csrf_hash)
+        .bind(site_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let body = form_body(&[
+        ("email", "new-subscriber@example.test"),
+        ("csrf", &csrf),
+        ("cf-turnstile-response", "dev-human-ok"),
+    ]);
+    let result = form_request(
+        Method::POST,
+        &format!("/subscribe/{site_id}"),
+        pool.clone(),
+        &body,
+        None,
+    )
+    .await;
+    assert_eq!(result.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM subscriptions WHERE site_id=$1")
+            .bind(site_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn management_ui_creates_edits_and_removes_site_with_csrf_and_cascades() {
+    let pool = connected_database().await;
+    let listing = response("/management", pool.clone()).await;
+    let html = String::from_utf8(
+        axum::body::to_bytes(listing.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let csrf = hidden_value(&html, "csrf");
+    let bad = form_body(&[
+        ("name", "Bad site"),
+        ("url", "https://bad.example"),
+        ("csrf", "wrong"),
+    ]);
+    let rejected = form_request(Method::POST, "/management", pool.clone(), &bad, None).await;
+    assert_eq!(rejected.status(), StatusCode::OK);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM monitored_sites WHERE normalized_url='https://bad.example/'"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+    let invalid_url = form_body(&[
+        ("name", "Invalid scheme"),
+        ("url", "javascript:alert(1)"),
+        ("csrf", &csrf),
+    ]);
+    let invalid = form_request(
+        Method::POST,
+        "/management",
+        pool.clone(),
+        &invalid_url,
+        None,
+    )
+    .await;
+    assert_eq!(invalid.status(), StatusCode::OK);
+    let invalid_html = String::from_utf8(
+        axum::body::to_bytes(invalid.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(invalid_html.contains("valid HTTP or HTTPS URL"));
+
+    let url = format!("https://management.example/{}", Uuid::new_v4());
+    let create = form_body(&[("name", "Managed example"), ("url", &url), ("csrf", &csrf)]);
+    let created = form_request(Method::POST, "/management", pool.clone(), &create, None).await;
+    assert_eq!(created.status(), StatusCode::SEE_OTHER);
+    let site_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM monitored_sites WHERE normalized_url=$1")
+            .bind(&url)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let subscriptions_enabled: bool =
+        sqlx::query_scalar("SELECT public_subscriptions_enabled FROM monitored_sites WHERE id=$1")
+            .bind(site_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        !subscriptions_enabled,
+        "omitted registration checkbox defaults disabled"
+    );
+    let listing = response("/management", pool.clone()).await;
+    let listing_html = String::from_utf8(
+        axum::body::to_bytes(listing.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let create_csrf = hidden_value(&listing_html, "csrf");
+    let enabled_url = format!("https://management.example/enabled/{}", Uuid::new_v4());
+    let enabled_create = form_body(&[
+        ("name", "Enabled at registration"),
+        ("url", &enabled_url),
+        ("public_subscriptions_enabled", "true"),
+        ("csrf", &create_csrf),
+    ]);
+    let created_enabled = form_request(
+        Method::POST,
+        "/management",
+        pool.clone(),
+        &enabled_create,
+        None,
+    )
+    .await;
+    assert_eq!(created_enabled.status(), StatusCode::SEE_OTHER);
+    assert!(
+        sqlx::query_scalar::<_, bool>(
+            "SELECT public_subscriptions_enabled FROM monitored_sites WHERE normalized_url=$1"
+        )
+        .bind(&enabled_url)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    );
+    let duplicate_page = response("/management", pool.clone()).await;
+    let duplicate_html = String::from_utf8(
+        axum::body::to_bytes(duplicate_page.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let duplicate_csrf = hidden_value(&duplicate_html, "csrf");
+    let duplicate_url = format!("{url}#same-site");
+    let duplicate_form = form_body(&[
+        ("name", "Should not overwrite"),
+        ("url", &duplicate_url),
+        ("csrf", &duplicate_csrf),
+    ]);
+    let duplicate = form_request(
+        Method::POST,
+        "/management",
+        pool.clone(),
+        &duplicate_form,
+        None,
+    )
+    .await;
+    assert_eq!(duplicate.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        duplicate.headers().get("location").unwrap(),
+        "/management?notice=duplicate"
+    );
+    let stored_name: String = sqlx::query_scalar("SELECT name FROM monitored_sites WHERE id=$1")
+        .bind(site_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stored_name, "Managed example");
+    let edit_page = response(&format!("/management/{site_id}/edit"), pool.clone()).await;
+    let edit_html = String::from_utf8(
+        axum::body::to_bytes(edit_page.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let edit_csrf = hidden_value(&edit_html, "csrf");
+    let changed_url = format!("https://management.example/changed/{}", Uuid::new_v4());
+    let edited_name = "Edited <script>alert(1)</script>";
+    let forged_edit = form_body(&[
+        ("name", "Forged update"),
+        ("url", &url),
+        ("interval_seconds", "7200"),
+        ("public_subscriptions_enabled", "true"),
+        ("csrf", "incorrect"),
+    ]);
+    assert_eq!(
+        form_request(
+            Method::POST,
+            &format!("/management/{site_id}/edit"),
+            pool.clone(),
+            &forged_edit,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert!(
+        !sqlx::query_scalar::<_, bool>(
+            "SELECT public_subscriptions_enabled FROM monitored_sites WHERE id=$1"
+        )
+        .bind(site_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        "invalid CSRF must not change subscription availability"
+    );
+    let edit = form_body(&[
+        ("name", edited_name),
+        ("url", &changed_url),
+        ("interval_seconds", "7200"),
+        ("monitoring_enabled", "true"),
+        ("public_subscriptions_enabled", "true"),
+        ("csrf", &edit_csrf),
+    ]);
+    let edited = form_request(
+        Method::POST,
+        &format!("/management/{site_id}/edit"),
+        pool.clone(),
+        &edit,
+        None,
+    )
+    .await;
+    assert_eq!(edited.status(), StatusCode::SEE_OTHER);
+    let (name, hash, enabled, subscriptions_enabled, interval): (String, Option<String>, bool, bool, i32) = sqlx::query_as(
+        "SELECT name,current_content_hash,monitoring_enabled,public_subscriptions_enabled,interval_seconds FROM monitored_sites WHERE id=$1",
+    )
+    .bind(site_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(name, edited_name);
+    assert_eq!(hash, None);
+    assert!(enabled);
+    assert!(subscriptions_enabled);
+    assert_eq!(interval, 7200);
+    let pause_page = response(&format!("/management/{site_id}/edit"), pool.clone()).await;
+    let pause_html = String::from_utf8(
+        axum::body::to_bytes(pause_page.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let pause_csrf = hidden_value(&pause_html, "csrf");
+    let pause = form_body(&[
+        ("name", edited_name),
+        ("url", &changed_url),
+        ("interval_seconds", "7200"),
+        ("csrf", &pause_csrf),
+    ]);
+    let paused = form_request(
+        Method::POST,
+        &format!("/management/{site_id}/edit"),
+        pool.clone(),
+        &pause,
+        None,
+    )
+    .await;
+    assert_eq!(paused.status(), StatusCode::SEE_OTHER);
+    let monitoring_enabled: bool =
+        sqlx::query_scalar("SELECT monitoring_enabled FROM monitored_sites WHERE id=$1")
+            .bind(site_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(!monitoring_enabled);
+    let subscriptions_enabled: bool =
+        sqlx::query_scalar("SELECT public_subscriptions_enabled FROM monitored_sites WHERE id=$1")
+            .bind(site_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        !subscriptions_enabled,
+        "unchecked subscription checkbox disables enrollment independently"
+    );
+
+    let subscription_id = Uuid::new_v4();
+    let token_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO subscriptions(id,site_id,subscriber_identity,status) VALUES($1,$2,$3,'active')").bind(subscription_id).bind(site_id).bind(format!("{}@example.test", Uuid::new_v4().simple())).execute(&pool).await.unwrap();
+    let change_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO site_changes(id,site_id,previous_content_hash,new_content_hash) VALUES($1,$2,$3,$4)").bind(change_id).bind(site_id).bind("a".repeat(64)).bind("b".repeat(64)).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO notification_outbox(id,change_id,subscription_id,recipient) VALUES($1,$2,$3,'person@example.test')").bind(Uuid::new_v4()).bind(change_id).bind(subscription_id).execute(&pool).await.unwrap();
+    let verification_hash = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    sqlx::query("INSERT INTO verification_tokens(token_id,token_hash,subscription_id,expires_at) VALUES($1,$2,$3,now()+interval '1 hour')").bind(token_id).bind(verification_hash).bind(subscription_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO email_action_outbox(id,action,recipient,token_id) VALUES($1,'verify','person@example.test',$2)").bind(Uuid::new_v4()).bind(token_id).execute(&pool).await.unwrap();
+    let listing = response("/management", pool.clone()).await;
+    let listing_html = String::from_utf8(
+        axum::body::to_bytes(listing.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(listing_html.contains("Edited &lt;script&gt;alert(1)&lt;&#x2f;script&gt;"));
+    assert!(!listing_html.contains("Edited <script>alert(1)</script>"));
+    assert!(listing_html.contains("<td>1</td>"));
+    assert!(listing_html.contains(">Paused</span>"));
+    assert!(listing_html.contains("Subscriptions Disabled"));
+    assert!(listing_html.contains(&format!(
+        "http:&#x2f;&#x2f;localhost:8080&#x2f;subscribe&#x2f;{site_id}"
+    )));
+    assert!(listing_html.contains("Copy link"));
+    assert!(listing_html.contains("target=\"_blank\" rel=\"noopener noreferrer\">View</a>"));
+    let enable_page = response(&format!("/management/{site_id}/edit"), pool.clone()).await;
+    let enable_html = String::from_utf8(
+        axum::body::to_bytes(enable_page.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let enable_csrf = hidden_value(&enable_html, "csrf");
+    let enable_subscriptions = form_body(&[
+        ("name", edited_name),
+        ("url", &changed_url),
+        ("interval_seconds", "7200"),
+        ("public_subscriptions_enabled", "true"),
+        ("csrf", &enable_csrf),
+    ]);
+    let enabled = form_request(
+        Method::POST,
+        &format!("/management/{site_id}/edit"),
+        pool.clone(),
+        &enable_subscriptions,
+        None,
+    )
+    .await;
+    assert_eq!(enabled.status(), StatusCode::SEE_OTHER);
+    let (monitoring_enabled, subscriptions_enabled): (bool, bool) = sqlx::query_as(
+        "SELECT monitoring_enabled,public_subscriptions_enabled FROM monitored_sites WHERE id=$1",
+    )
+    .bind(site_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        !monitoring_enabled && subscriptions_enabled,
+        "enabling subscriptions must not resume monitoring"
+    );
+    let enabled_listing = response("/management", pool.clone()).await;
+    let enabled_html = String::from_utf8(
+        axum::body::to_bytes(enabled_listing.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(enabled_html.contains("Subscriptions Enabled"));
+    assert!(enabled_html.contains(&format!(
+        "http:&#x2f;&#x2f;localhost:8080&#x2f;subscribe&#x2f;{site_id}"
+    )));
+    let disable_page = response(&format!("/management/{site_id}/edit"), pool.clone()).await;
+    let disable_html = String::from_utf8(
+        axum::body::to_bytes(disable_page.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let disable_csrf = hidden_value(&disable_html, "csrf");
+    let disable_subscriptions = form_body(&[
+        ("name", edited_name),
+        ("url", &changed_url),
+        ("interval_seconds", "7200"),
+        ("csrf", &disable_csrf),
+    ]);
+    let disabled = form_request(
+        Method::POST,
+        &format!("/management/{site_id}/edit"),
+        pool.clone(),
+        &disable_subscriptions,
+        None,
+    )
+    .await;
+    assert_eq!(disabled.status(), StatusCode::SEE_OTHER);
+    let delete_page = response(&format!("/management/{site_id}/delete"), pool.clone()).await;
+    let delete_html = String::from_utf8(
+        axum::body::to_bytes(delete_page.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let delete_csrf = hidden_value(&delete_html, "csrf");
+    let delete = form_body(&[("csrf", &delete_csrf)]);
+    let removed = form_request(
+        Method::POST,
+        &format!("/management/{site_id}/delete"),
+        pool.clone(),
+        &delete,
+        None,
+    )
+    .await;
+    assert_eq!(removed.status(), StatusCode::SEE_OTHER);
+    for (table, col) in [
+        ("subscriptions", "site_id"),
+        ("site_changes", "site_id"),
+        ("email_action_outbox", "token_id"),
+    ] {
+        let query = format!("SELECT count(*) FROM {table} WHERE {col}=$1");
+        if col == "token_id" {
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(&query)
+                    .bind(token_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap(),
+                0
+            );
+        } else {
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(&query)
+                    .bind(site_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap(),
+                0
+            );
+        }
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM notification_outbox WHERE change_id=$1 OR subscription_id=$2"
+        )
+        .bind(change_id)
+        .bind(subscription_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        response(&format!("/management/{site_id}/edit"), pool)
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
 async fn unknown_routes_use_consistent_error_shape() {
     let response = response("/missing", connected_database().await).await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -646,11 +1144,14 @@ async fn development_api_is_disabled_unless_explicitly_enabled() {
 #[tokio::test]
 async fn normalized_duplicate_site_registration_returns_same_site() {
     let database = connected_database().await;
+    let unique_path = Uuid::new_v4();
+    let original_url = format!("HTTP://Example.com:80/a/{unique_path}#one");
+    let duplicate_url = format!("http://example.com/a/{unique_path}#two");
     let first = request(
         Method::POST,
         "/api/v1/sites",
         database.clone(),
-        Some(serde_json::json!({"url":"HTTP://Example.com:80/a#one"})),
+        Some(serde_json::json!({"name":"Example", "url":original_url})),
     )
     .await;
     assert_eq!(first.status(), StatusCode::CREATED);
@@ -662,7 +1163,7 @@ async fn normalized_duplicate_site_registration_returns_same_site() {
         Method::POST,
         "/api/v1/sites",
         database.clone(),
-        Some(serde_json::json!({"url":"http://example.com/a#two","interval_seconds":86400})),
+        Some(serde_json::json!({"name":"Ignored duplicate", "url":duplicate_url,"interval_seconds":86400})),
     )
     .await;
     assert_eq!(second.status(), StatusCode::OK);
@@ -671,7 +1172,10 @@ async fn normalized_duplicate_site_registration_returns_same_site() {
         .unwrap();
     let second: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
     assert_eq!(first["id"], second["id"]);
-    assert_eq!(first["normalized_url"], "http://example.com/a");
+    assert_eq!(
+        first["normalized_url"],
+        format!("http://example.com/a/{unique_path}")
+    );
     assert_eq!(first["public_subscriptions_enabled"], false);
     assert!(
         first["subscription_url"]
@@ -679,7 +1183,7 @@ async fn normalized_duplicate_site_registration_returns_same_site() {
             .unwrap()
             .ends_with(&format!("/subscribe/{}", first["id"].as_str().unwrap()))
     );
-    let id = first["id"].as_str().unwrap();
+    let id = Uuid::parse_str(first["id"].as_str().unwrap()).unwrap();
     let disabled_page = response(&format!("/subscribe/{id}"), database.clone()).await;
     assert_eq!(disabled_page.status(), StatusCode::NOT_FOUND);
     let disabled_html = String::from_utf8(
@@ -694,7 +1198,7 @@ async fn normalized_duplicate_site_registration_returns_same_site() {
         Method::PATCH,
         &format!("/api/v1/sites/{id}"),
         database.clone(),
-        Some(serde_json::json!({"interval_seconds":3600,"public_subscriptions_enabled":true})),
+        Some(serde_json::json!({"name":"Example updated", "interval_seconds":3600,"public_subscriptions_enabled":true,"monitoring_enabled":false})),
     )
     .await;
     assert_eq!(update.status(), StatusCode::OK);
@@ -704,6 +1208,67 @@ async fn normalized_duplicate_site_registration_returns_same_site() {
     let updated: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(updated["interval_seconds"], 3600);
     assert_eq!(updated["public_subscriptions_enabled"], true);
+    assert_eq!(updated["name"], "Example updated");
+    assert_eq!(updated["monitoring_enabled"], false);
+    sqlx::query("UPDATE monitored_sites SET current_content_hash=$2,last_checked_at=now(),last_successful_check_at=now() WHERE id=$1")
+        .bind(id)
+        .bind("a".repeat(64))
+        .execute(&database)
+        .await
+        .unwrap();
+    let replacement_url = format!("https://example.com/revised/{}", Uuid::new_v4());
+    let changed_url = request(
+        Method::PATCH,
+        &format!("/api/v1/sites/{id}"),
+        database.clone(),
+        Some(serde_json::json!({"url":replacement_url,"monitoring_enabled":true})),
+    )
+    .await;
+    assert_eq!(changed_url.status(), StatusCode::OK);
+    let changed: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(changed_url.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(changed["id"], id.to_string());
+    assert_eq!(changed["current_content_hash"], serde_json::Value::Null);
+    assert_eq!(changed["last_checked_at"], serde_json::Value::Null);
+    assert_eq!(changed["last_successful_check_at"], serde_json::Value::Null);
+    let other_url = format!("https://example.com/other/{}", Uuid::new_v4());
+    let other = request(
+        Method::POST,
+        "/api/v1/sites",
+        database.clone(),
+        Some(serde_json::json!({"name":"Other", "url":other_url})),
+    )
+    .await;
+    let other: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(other.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let conflict = request(
+        Method::PATCH,
+        &format!("/api/v1/sites/{id}"),
+        database.clone(),
+        Some(serde_json::json!({"url":other["original_url"]})),
+    )
+    .await;
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    let other_id = other["id"].as_str().unwrap();
+    assert_eq!(
+        request(
+            Method::DELETE,
+            &format!("/api/v1/sites/{other_id}"),
+            database.clone(),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
     let invalid = request(
         Method::PATCH,
         &format!("/api/v1/sites/{id}"),
@@ -729,7 +1294,7 @@ async fn subscription_operations_are_scoped_to_subscriber_identity() {
         Method::POST,
         "/api/v1/sites",
         database.clone(),
-        Some(serde_json::json!({"url":format!("https://example.com/{}", Uuid::new_v4())})),
+        Some(serde_json::json!({"name":"Create test", "url":format!("https://example.com/{}", Uuid::new_v4())})),
     )
     .await;
     let body = axum::body::to_bytes(created.into_body(), usize::MAX)
@@ -804,7 +1369,7 @@ async fn site_change_history_has_stable_individual_resource() {
         Method::POST,
         "/api/v1/sites",
         database.clone(),
-        Some(serde_json::json!({"url":format!("https://example.com/history/{}", Uuid::new_v4())})),
+        Some(serde_json::json!({"name":"History test", "url":format!("https://example.com/history/{}", Uuid::new_v4())})),
     )
     .await;
     let body = axum::body::to_bytes(site_response.into_body(), usize::MAX)

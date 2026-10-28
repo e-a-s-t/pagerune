@@ -7,7 +7,8 @@ and storage layer, managed separately by CloudNativePG. SMTP is an external prot
 endpoint operated by the deployer; no SaaS is required.
 
 ## Data model
-- Monitored site: UUID, original URL, normalized unique URL, configurable interval,
+- Monitored site: UUID, required display name, original URL, normalized unique URL,
+  monitoring-enabled flag, configurable interval,
   current hash/ETag/Last-Modified, last check/success timestamps and current status.
 - Subscription: monitored site + opaque subscriber identity. The identity is a development
   association only; it is not proof of ownership or authorization.
@@ -43,7 +44,7 @@ assembly is an internal privileged workflow, not a tenant API. Never expose fore
 customer subscriber details. Subscription verification and unsubscribe scopes are explicit.
 
 ## Scheduling and concurrency
-1. Every replica polls PostgreSQL for due sites. A short transaction claims one due row
+1. Every replica polls PostgreSQL for enabled due sites. A short transaction claims one due row
    with `FOR UPDATE SKIP LOCKED`, sets a 180-second lease and increments its generation.
 2. The transaction commits before DNS resolution and HTTP fetching. HTTP timeout defaults
    to 15 seconds and body size defaults to 2 MiB; both are configurable.
@@ -102,9 +103,10 @@ Public pages use Axum, MiniJinja and local CSS. `/subscribe/{site_id}` only enro
 to an existing site whose public enrollment flag is enabled; it never registers or fetches
 the submitted website URL. The monitoring interval comes from the registered site. Browser
 forms use one-use PostgreSQL CSRF nonces. The site-registration JSON API remains disabled
-by default and loopback-only, with private/operator-mediated owner access. OIDC and admin
-sessions are out of scope for this phase. No React, Node build pipeline, or separate
-frontend deployment is introduced.
+by default and loopback-only for direct host development. In the local Compose auth stack,
+the management API is enabled on an unpublished backend port and is reachable through
+OAuth2 Proxy only. No React, Node build pipeline, or separate frontend deployment is
+introduced.
 
 Cloudflare Turnstile is called through a replaceable server-side human-verification
 adapter. The server verifies provider success, expected action and configured public host;
@@ -115,6 +117,39 @@ Management requests return the same response for every address. A management ema
 is exchanged only through POST, consuming it and creating a new PostgreSQL session. Session
 reads and unsubscribe writes are scoped by normalized verified email; writes require a
 session-bound CSRF value. Session and token expiration is checked against database time.
+
+### Local administrative access
+
+The local Compose stack adds Keycloak and OAuth2 Proxy. The realm import defines the
+`pagerune-management` client and group and the development-only `admin` account. OAuth2
+Proxy is the sole published PageRune ingress in Compose and routes to the PageRune service
+over a private network. It exempts only public subscription, verification, subscriber
+email-management, unsubscribe, landing and static routes; management UI, business API,
+OpenAPI and Swagger require the management group. API paths return 401 rather than a login
+redirect. The backend does not implement OIDC or trust client-supplied identity headers.
+
+PageRune remains runnable on the host through Devbox. In that local mode, the host process
+binds to the Docker bridge gateway interface and OAuth2 Proxy connects through
+`host.docker.internal`; this is a developer-only transport setup. Production must keep the
+application listener private behind its authenticated HTTPS ingress and use production
+secrets and Secure cookies. The server-rendered management UI uses the same protected route
+and displays the global monitored-site collection; it does not imply tenant membership or
+per-resource authorization. The existing subscriber `/manage` route remains public and uses
+email-token sessions.
+
+Management forms use one-use rows in `web_form_nonces`, scoped by purpose and site UUID. They
+create and update sites through parameterized SQL with the existing URL normalization and
+SSRF-safe fetch path. Site list aggregates include active subscriptions and the latest
+change timestamp. Disabling a site clears its lease and prevents new scheduler claims.
+Changing its normalized URL clears validators, current hash, and current check timestamps
+so the next successful fetch establishes a silent baseline while retaining history and
+subscriptions.
+
+Site deletion locks the site row, then acquires subscription advisory locks in stable UUID
+order before deleting. This waits for any notification worker holding the matching lock.
+Foreign keys cascade subscription tokens, pending notifications, and change history;
+verification email jobs are explicitly deleted because their token reference is not a
+foreign key. The deleted site row invalidates monitoring workers' leases and fencing checks.
 
 ## Storage and retention
 Only one current normalized body/hash per watch. Cycle metadata and immutable digest

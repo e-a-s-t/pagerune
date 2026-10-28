@@ -1,58 +1,55 @@
 # PageRune
 
 Website updates, delivered. A self-hosted service where site owners register pages
-and visitors subscribe to all updates or selected topics. Pages are checked once
-before a daily combined digest. Update links go directly to the original pages.
+and visitors subscribe to updates. PageRune monitors normalized pages and sends email
+notifications when they change.
 
 ## Status
-**Core monitoring, public email double opt-in, management links, customizable notifications,
-and secure unsubscribe implemented.** PageRune stores state in PostgreSQL, checks normalized
-monitored URLs with SSRF controls, and coordinates monitoring and email workers across
-replicas with leases and fencing. Each site has a permanent subscription URL; public
-enrollment defaults off and must be enabled through the private development API. Visitors
-must pass server-side human verification and confirm their email before activation. SMTP
-delivery is at-least-once; exactly-once delivery cannot be guaranteed after SMTP acceptance
-and a process crash. OIDC and the owner dashboard are not implemented.
+
+Core monitoring, public double opt-in subscriptions, email-token subscriber management,
+secure unsubscribe, local OIDC management access, and a functional website administration
+UI are implemented. Administrators can register, edit, pause, inspect, and remove monitored
+websites. Tenant membership and per-tenant resource authorization remain future work. SMTP
+delivery is at-least-once.
 
 ## Development
-Prerequisites: install Devbox, direnv with its shell hook enabled, and Docker Compose. The
-Rust application runs locally through Devbox; the existing Compose file runs PostgreSQL
-and Mailpit. See [the local development guide](docs/Development.md) for details.
+
+Install Devbox, direnv with its shell hook, and Docker Compose. Copy the ignored local
+environment file and start the full Compose stack:
 
 ```sh
 cp .env.example .env
-# Review local values; .env is ignored by Git.
 devbox install
 direnv allow
 direnv exec . docker compose up -d
-direnv exec . devbox run migrate
-direnv exec . devbox run run
 ```
 
-In another terminal, run `direnv exec . devbox run check` for formatting, Clippy, unit
-tests, and PostgreSQL integration tests. Stop services with
-`direnv exec . docker compose down`; PostgreSQL data remains in its Compose volume. Swagger
-UI is at http://127.0.0.1:8080/swagger-ui/ and Mailpit at http://127.0.0.1:8025. Run the
-migration command again after pulling migration changes.
+Open the public site at http://localhost:8088. The protected Management UI is at
+http://localhost:8088/management; sign in with the local Keycloak account `admin` /
+`admin`. These are development-only credentials. Management logout clears the OAuth2 Proxy
+session. Keycloak is available at http://keycloak.localhost:8081 and Mailpit at
+http://127.0.0.1:8025. The realm and client are imported automatically.
 
-First setup downloads the pinned toolchain and dependencies. `devbox.lock` and
-`Cargo.lock` are generated lockfiles and are committed to keep the development
-environment and Rust dependency resolution reproducible.
-The application intentionally does not load `.env`; direnv supplies the environment.
-CI must run the same Devbox scripts with its environment injected explicitly.
+The original host-run Devbox workflow is also supported; see
+[docs/Development.md](docs/Development.md) for host gateway setup and migration commands.
+Run `direnv exec . devbox run check` for formatting, Clippy, unit tests, and PostgreSQL
+integration tests. `devbox.lock` and `Cargo.lock` are committed. The application does not
+load `.env`; direnv provides environment variables.
 
 ## Documentation
-- [Requirements](docs/Requirements.md): agreed scope and acceptance criteria.
-- [Architecture](docs/Architecture.md): tenancy, daily cycle and durable delivery.
-- [ADRs](docs/Adr.md): accepted decisions and unresolved choices.
-- [API plan](docs/Api.md): route inventory and security boundaries.
+
+- [Requirements](docs/Requirements.md): product scope and acceptance criteria.
+- [Architecture](docs/Architecture.md): tenancy, delivery, and local authentication.
+- [ADRs](docs/Adr.md): architecture decisions.
+- [API](docs/Api.md): routes and security boundaries.
 - [Test cases](docs/Testcases.md): behavioral verification matrix.
-- [Development](docs/Development.md): tools, environment and commands.
-- [Configuration](docs/Configuration.md): current and planned settings.
-- [Security](docs/Security.md): identity, tenancy, token and fetching controls.
-- [Operations](docs/Operations.md): CNPG, replicas, backups and observability.
+- [Development](docs/Development.md): local workflows and commands.
+- [Configuration](docs/Configuration.md): application and local auth settings.
+- [Security](docs/Security.md): identity, tenancy, tokens, and fetching controls.
+- [Operations](docs/Operations.md): CNPG, replicas, backups, and observability.
 - [Roadmap](docs/Roadmap.md): implementation phases.
 
 ## License
-Not selected. There is deliberately no LICENSE file; the owner must choose terms
-before public redistribution. No association with any existing PageRune product is claimed.
+
+Not selected. There is deliberately no LICENSE file; the owner must choose terms before
+public redistribution. No association with any existing PageRune product is claimed.

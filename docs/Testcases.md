@@ -26,7 +26,7 @@ a local capture server. OIDC tests use controlled discovery/JWKS and invalid-tok
 | SUB-10 | Unsubscribe GET, invalid token, repeated browser/one-click POST | GET is read-only; invalid token does not affect a subscription; POST is idempotent and removes only the matching subscription | HTTP + PostgreSQL / IMPLEMENTED |
 | PUB-01 | Site subscription flag omitted at registration | Flag defaults false and generated public URL remains inactive | HTTP + PostgreSQL |
 | PUB-02 | Owner enables/disables site enrollment through private API | Only enabled site URLs render an enrollment form; disabled site GET/POST cannot create subscriptions | HTTP |
-| PUB-03 | Public subscription with forged/failed/expired Turnstile token | Server rejects and does not create a subscription; local test verifier is loopback-only | HTTP + provider adapter |
+| PUB-03 | Public subscription with forged/failed/expired Turnstile token | Server rejects and does not create a subscription; local test verifier is loopback-only or behind explicit trusted proxy mode in Compose | HTTP + provider adapter |
 | PUB-13 | Turnstile success, invalid, expired, replayed, wrong action/hostname, timeout and provider failure | Only successful tokens for the expected action and hostname are accepted; failures reject enrollment and management requests | Provider adapter unit + HTTP |
 | UI-02 | Monitoring interval labels on subscribe and management pages | 60 seconds through one day use correct units and singular/plural without zero rounding | Unit + rendered page |
 | PUB-04 | Valid public request, duplicate active/pending address, concurrent duplicate requests | Generic response; one site/email row; active row is not duplicated; pending token is rotated safely | PostgreSQL concurrency |
@@ -46,9 +46,25 @@ a local capture server. OIDC tests use controlled discovery/JWKS and invalid-tok
 | OWN-01 | Site ownership not verified | Cannot activate watches or publish subscription form | Integration |
 | TEN-01 | Tenant A requests B site/watch IDs | No disclosure or mutation; composite FK prevents cross-link | Integration |
 | TEN-02 | Same person subscribes to two tenants | Single daily digest; owners see only their own contact scope | Integration |
-| AUTH-01 | Wrong issuer/audience, expired/forged token or ID token | Admin API rejects request | Integration |
-| AUTH-02 | Valid token without tenant membership | Access denied to tenant resources | Integration |
-| AUTH-03 | OIDC callback wrong state/nonce; session on another replica | Invalid callback rejected; valid session portable | Integration |
+| AUTH-01 | Wrong issuer, expired/forged token or invalid OIDC session | OAuth2 Proxy rejects authentication | Compose integration |
+| AUTH-02 | Valid local administrator versus a user outside the management group | Only the configured management group reaches management routes; tenant authorization is not implied | Compose integration |
+| AUTH-03 | OIDC callback has wrong state/nonce | OAuth2 Proxy rejects invalid callback | Compose integration |
+| AUTH-04 | Public routes through OAuth2 Proxy without a session | Landing, subscribe, verify, subscriber `/manage`, unsubscribe and static routes remain accessible | Compose integration |
+| AUTH-05 | Unauthenticated management UI request | Redirects to Keycloak; website management page requires a session | Compose integration |
+| AUTH-06 | Unauthenticated management API request with JSON Accept | Returns 401 without a login redirect | Compose integration |
+| AUTH-07 | Seeded administrator login | `admin` / `admin` obtains authorized management access | Compose integration |
+| AUTH-08 | Invalid credentials | Management access is not granted | Compose integration |
+| AUTH-09 | Logout then revisit management | Proxy cookie is cleared; next request requires authentication again | Compose integration |
+| AUTH-10 | Spoofed identity headers and direct backend access | Proxy strips client auth headers; Compose has no published backend port | Compose integration |
+| AUTH-11 | Realm bootstrap with existing PostgreSQL volume | DB setup is idempotent and realm/client/user import needs no console setup | Compose integration |
+| UI-03 | Management listing with websites, empty state, pagination, status/history and active subscriber counts | Correct escaped site information and bounded page navigation | HTTP + PostgreSQL |
+| UI-03a | Management subscription link for enabled and disabled sites | Absolute URL uses configured public base URL and stable site UUID; View and Copy link are present in both states, state is clear, and HTML is escaped | Unit + HTTP |
+| UI-03b | Disabled site's public subscription link | Link remains visible in management, but public endpoint rejects enrollment and creates no subscription | HTTP + PostgreSQL |
+| UI-04 | Register, edit name/URL/interval, pause/resume and remove through management forms | Changes persist without restart; URL edits retain site identity and rebaseline silently | HTTP + PostgreSQL |
+| UI-04a | Register and edit public subscription availability through management forms | Registration defaults disabled; enable/disable persists independently of monitoring; current state is shown after save and the permanent URL remains available | HTTP + PostgreSQL |
+| UI-05 | Invalid/duplicate management URL, invalid name, expired or forged CSRF nonce | No invalid mutation; clear validation feedback and single-use form protection for all management settings | HTTP + PostgreSQL |
+| UI-06 | Remove website with active subscribers and pending verification/notification work | In-flight send drains; related subscriptions, tokens, history, and pending work are removed | PostgreSQL + SMTP concurrency |
+| MON-03 | Disabled site becomes due, scheduler polling and re-enable across replicas | Disabled site is not claimed; enabled site is claimed without restart; stale lease cannot update removed/paused site | PostgreSQL concurrency |
 | SUB-01 | Anonymous subscription request | Generic response; no notifications before confirmation | Integration |
 | SUB-02 | Valid, expired, reused or wrong-purpose confirmation | Only valid unused token activates | Integration |
 | SUB-03 | Email scanner GETs every mail link | No activation/unsubscribe/state mutation | HTTP |

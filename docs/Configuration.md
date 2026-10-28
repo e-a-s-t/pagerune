@@ -7,6 +7,7 @@
 | DATABASE_URL | PostgreSQL URL, including TLS settings | Required; PostgreSQL scheme only |
 | RUST_LOG | tracing filter | pagerune=info |
 | PAGERUNE_DEV_API_ENABLED | Enable temporary business APIs; requires loopback bind | false |
+| PAGERUNE_TRUSTED_PROXY_MODE | Permit the development API on a non-loopback listener behind an isolated trusted proxy | false |
 | PAGERUNE_FETCH_TIMEOUT_SECONDS | Per-request HTTP timeout in seconds | 15 (range 1–120) |
 | PAGERUNE_MAX_RESPONSE_BYTES | Maximum fetched body size | 2097152 (range 1024–20971520) |
 
@@ -26,12 +27,12 @@ is capped at five connections per replica; size total connections against CNPG c
 | SMTP_TIMEOUT_SECONDS | Connection/operation timeout | 15 (range 1–120) |
 | PAGERUNE_NOTIFICATION_CONCURRENCY | Maximum in-flight deliveries per replica | 2 (range 1–32) |
 | PAGERUNE_NOTIFICATION_MAX_ATTEMPTS | Attempts before terminal failure | 8 (range 1–20) |
-| PAGERUNE_PUBLIC_BASE_URL | Public origin for subscription, verification, management and unsubscribe URLs | http://localhost:8080 |
+| PAGERUNE_PUBLIC_BASE_URL | Public origin for subscription, verification, management and unsubscribe URLs; Management UI subscription links use this origin even when the management hostname differs | http://localhost:8080 |
 | PAGERUNE_EMAIL_TEMPLATE_DIR | Directory containing `change.html` and `change.txt` | templates/email |
 | PAGERUNE_TOKEN_KEY | 64-hex-character shared key for deriving queued verification and management link tokens | Required |
 | PAGERUNE_TURNSTILE_SITE_KEY | Public widget key | Required unless loopback test mode |
 | PAGERUNE_TURNSTILE_SECRET | Server-side Turnstile validation secret | Required unless loopback test mode |
-| PAGERUNE_TURNSTILE_TEST_MODE | Enable fixed local test token; requires the loopback development API | false |
+| PAGERUNE_TURNSTILE_TEST_MODE | Enable fixed local test token; requires loopback development API or trusted proxy mode | false |
 
 The subscription and management forms render the Turnstile widget with its appearance set
 to `always` when test mode is off. Configure the Cloudflare widget in Managed mode
@@ -42,8 +43,9 @@ rendered into the page; the secret remains server-side. Every POST validates the
 success, action and hostname. Invalid, expired, replayed, malformed, timed-out or
 unavailable provider responses are rejected. Production must provide both Turnstile keys;
 startup fails if either is missing. For local development only, set
-`PAGERUNE_DEV_API_ENABLED=true` on a loopback bind and
-`PAGERUNE_TURNSTILE_TEST_MODE=true`; the page then submits the explicit fixed test token
+`PAGERUNE_DEV_API_ENABLED=true` on a loopback bind (or behind the isolated local Compose
+proxy with `PAGERUNE_TRUSTED_PROXY_MODE=true`) and `PAGERUNE_TURNSTILE_TEST_MODE=true`; the
+page then submits the explicit fixed test token
 and no external challenge is used. Do not use test mode in production.
 
 Verification links expire after 24 hours, management links after 15 minutes, and
@@ -58,15 +60,27 @@ Template files are read for each email, so edits apply without recompilation or 
 Missing files fall back to bundled defaults; unreadable or invalid templates fail delivery.
 HTML variables are autoescaped.
 
+## Local Compose authentication
+| Variable | Meaning |
+|---|---|
+| KEYCLOAK_DB_PASSWORD | Keycloak database password in the separate DB on the existing PostgreSQL service |
+| KEYCLOAK_ADMIN_USER / KEYCLOAK_ADMIN_PASSWORD | Keycloak bootstrap console credentials, separate from the PageRune login |
+| KEYCLOAK_CLIENT_SECRET | Confidential `pagerune-management` client secret rendered into the realm import |
+| OAUTH2_PROXY_COOKIE_SECRET | Encryption/authentication secret for proxy cookie sessions |
+| OAUTH2_PROXY_OIDC_ISSUER_URL | Exact Keycloak issuer URL used by browser and proxy: `http://keycloak.localhost:8081/realms/pagerune` |
+| PAGERUNE_PROXY_PORT | Local host port for OAuth2 Proxy, Keycloak callback, and public links | 8088 |
+
+The imported PageRune user is `admin` / `admin` and belongs to the
+`pagerune-management` group. Values in `.env.example` are local-development placeholders,
+not production credentials. Compose sets `Secure=false` only for local HTTP. Production
+must supply independent secrets, require HTTPS and Secure cookies, and keep the backend
+private behind its authenticated ingress.
+
 ## Planned contract
 | Variable | Meaning |
 |---|---|
 | PAGERUNE_DIGEST_TIME | Daily local time; proposed default 18:00 |
 | PAGERUNE_TIMEZONE | IANA timezone; proposed default Europe/Stockholm |
-| OIDC_ISSUER_URL | Discovery issuer, verified exactly |
-| OIDC_CLIENT_ID / OIDC_CLIENT_SECRET | Server-side browser client; secret if confidential |
-| OIDC_AUDIENCE | Expected API access-token audience |
-| OIDC_REDIRECT_URL | Registered callback URL |
 
 Retention and rate limits need validated settings before public launch.
 Secrets are supplied via Kubernetes Secret or secret injection; never write them to

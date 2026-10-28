@@ -1,0 +1,95 @@
+{
+  "realm": "pagerune",
+  "enabled": true,
+  "sslRequired": "none",
+  "groups": [
+    { "name": "pagerune-management" }
+  ],
+  "clients": [
+    {
+      "clientId": "pagerune-management",
+      "name": "PageRune Management (local development)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "__KEYCLOAK_CLIENT_SECRET__",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:__PAGERUNE_PROXY_PORT__/oauth2/callback"],
+      "webOrigins": ["http://localhost:__PAGERUNE_PROXY_PORT__"]
+    }
+  ],
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "firstName": "Local",
+      "lastName": "Administrator",
+      "email": "admin@localhost",
+      "emailVerified": true,
+      "groups": ["pagerune-management"],
+      "credentials": [
+        { "type": "password", "value": "admin", "temporary": false }
+      ]
+    }
+  ],
+  "clientScopes": [
+    {
+      "name": "email",
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "email",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "email",
+            "claim.name": "email",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "email verified",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "emailVerified",
+            "claim.name": "email_verified",
+            "jsonType.label": "boolean",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "pagerune-groups",
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "claim.name": "groups"
+          }
+        }
+      ]
+    }
+  ],
+  "defaultDefaultClientScopes": ["email", "pagerune-groups"]
+}

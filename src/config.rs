@@ -7,6 +7,7 @@ pub struct Config {
     pub bind: SocketAddr,
     pub database: PgConnectOptions,
     pub dev_api_enabled: bool,
+    pub trusted_proxy_mode: bool,
     pub fetch_timeout_seconds: u64,
     pub max_response_bytes: usize,
     pub smtp: crate::notifications::SmtpConfig,
@@ -25,6 +26,7 @@ impl Config {
             env::var("PAGERUNE_BIND").ok(),
             env::var("DATABASE_URL").ok(),
             env::var("PAGERUNE_DEV_API_ENABLED").ok(),
+            env::var("PAGERUNE_TRUSTED_PROXY_MODE").ok(),
             env::var("PAGERUNE_FETCH_TIMEOUT_SECONDS").ok(),
             env::var("PAGERUNE_MAX_RESPONSE_BYTES").ok(),
             crate::notifications::SmtpConfig::from_env()?,
@@ -49,6 +51,7 @@ impl Config {
             bind,
             database_url,
             dev_api_enabled,
+            None,
             fetch_timeout_seconds,
             max_response_bytes,
             crate::notifications::SmtpConfig::default(),
@@ -67,6 +70,7 @@ impl Config {
         bind: Option<String>,
         database_url: Option<String>,
         dev_api_enabled: Option<String>,
+        trusted_proxy_mode: Option<String>,
         fetch_timeout_seconds: Option<String>,
         max_response_bytes: Option<String>,
         smtp: crate::notifications::SmtpConfig,
@@ -94,8 +98,15 @@ impl Config {
             "false" => false,
             _ => bail!("PAGERUNE_DEV_API_ENABLED must be true or false"),
         };
-        if dev_api_enabled && !bind.ip().is_loopback() {
-            bail!("PAGERUNE_DEV_API_ENABLED requires PAGERUNE_BIND to use a loopback address");
+        let trusted_proxy_mode = match trusted_proxy_mode.as_deref().unwrap_or("false") {
+            "true" => true,
+            "false" => false,
+            _ => bail!("PAGERUNE_TRUSTED_PROXY_MODE must be true or false"),
+        };
+        if dev_api_enabled && !bind.ip().is_loopback() && !trusted_proxy_mode {
+            bail!(
+                "PAGERUNE_DEV_API_ENABLED requires a loopback bind unless PAGERUNE_TRUSTED_PROXY_MODE is true"
+            );
         }
         let fetch_timeout_seconds = fetch_timeout_seconds
             .unwrap_or_else(|| "15".into())
@@ -119,9 +130,11 @@ impl Config {
             .try_into()
             .map_err(|_| anyhow::anyhow!("PAGERUNE_TOKEN_KEY must be 64 hexadecimal characters"))?;
         let test_human_verification = match test_human_verification.as_deref().unwrap_or("false") {
-            "true" if dev_api_enabled && bind.ip().is_loopback() => true,
+            "true" if dev_api_enabled && (bind.ip().is_loopback() || trusted_proxy_mode) => true,
             "true" => {
-                bail!("PAGERUNE_TURNSTILE_TEST_MODE requires the loopback-only development API")
+                bail!(
+                    "PAGERUNE_TURNSTILE_TEST_MODE requires the loopback development API or trusted proxy mode"
+                )
             }
             "false" => false,
             _ => bail!("PAGERUNE_TURNSTILE_TEST_MODE must be true or false"),
@@ -139,6 +152,7 @@ impl Config {
             bind,
             database,
             dev_api_enabled,
+            trusted_proxy_mode,
             fetch_timeout_seconds,
             max_response_bytes,
             smtp,
@@ -272,5 +286,29 @@ mod tests {
             .unwrap()
             .dev_api_enabled
         );
+    }
+
+    #[test]
+    fn trusted_proxy_mode_allows_private_non_loopback_dev_api_bind() {
+        let config = Config::from_values_full(
+            Some("0.0.0.0:8080".into()),
+            Some(VALID_DATABASE.into()),
+            Some("true".into()),
+            Some("true".into()),
+            None,
+            None,
+            crate::notifications::SmtpConfig::default(),
+            None,
+            None,
+            None,
+            Some("0000000000000000000000000000000000000000000000000000000000000000".into()),
+            Some("test-site-key".into()),
+            None,
+            Some("true".into()),
+        )
+        .unwrap();
+        assert!(config.dev_api_enabled);
+        assert!(config.trusted_proxy_mode);
+        assert!(config.test_human_verification);
     }
 }

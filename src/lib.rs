@@ -172,7 +172,7 @@ async fn unsubscribe_post(
 
 #[derive(OpenApi)]
 #[openapi(
-    info(title = "PageRune", version = "0.3.0", description = "Public opt-in subscriptions use email verification. Site registration and the JSON business API remain disabled by default and loopback-only for development."),
+    info(title = "PageRune", version = "0.3.0", description = "Public opt-in subscriptions use email verification. The development business API is disabled by default; local Compose access is protected by OAuth2 Proxy."),
     paths(healthz, readyz, unsubscribe_confirm, unsubscribe_post,
         web::index, web::subscribe_page, web::subscribe, web::verify_page, web::verify,
         web::manage, web::request_management, web::management_exchange_page,

@@ -1,124 +1,89 @@
 # Local development
 
-## Prerequisites
+## Prerequisites and setup
 
-- [Devbox](https://www.jetify.com/docs/devbox/) for the Rust toolchain and development commands.
-- [direnv](https://direnv.net/) with its shell hook enabled, so application settings are loaded into your shell.
-- Docker Compose and a running compatible container engine for PostgreSQL and Mailpit.
-
-## Email templates
-Edit `templates/email/change.html` and `templates/email/change.txt` while the app runs;
-the next notification uses those changes without recompilation or restart. Inspect
-multipart messages in Mailpit at `http://127.0.0.1:8025`. Set `PAGERUNE_PUBLIC_BASE_URL`
-in `.env` to the origin used for unsubscribe links.
-
-The Rust application runs on the host through Devbox. Only PostgreSQL and Mailpit run in containers. Devbox does not provide a container engine.
-
-## Initial setup
-
-From the repository root, copy the example environment file, review its values, and approve direnv's environment for this directory:
+Install Devbox, direnv with its shell hook, Docker Compose, and a compatible container
+engine. Devbox supplies the Rust toolchain; direnv supplies app and Compose environment
+variables. First setup:
 
 ```sh
 cp .env.example .env
-# Review .env, especially database credentials and connection settings.
 devbox install
 direnv allow
-```
-
-`.env` is ignored by Git. `.envrc` loads `.env.example` defaults and then `.env` overrides through direnv; keep development application variables in these direnv-managed files (or ignored `.envrc.local` overrides), not in Devbox configuration or application dotenv code. If your shell hook is active, entering the directory loads the environment. `direnv exec . <command>` explicitly runs the command with it loaded.
-
-## Start local services
-
-Start the existing PostgreSQL and Mailpit services from the repository root:
-
-```sh
 direnv exec . docker compose up -d
 ```
 
-Compose reads `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD` from the direnv environment. It publishes PostgreSQL on `127.0.0.1:5432` and Mailpit's SMTP and web interfaces on `127.0.0.1:1025` and `127.0.0.1:8025`, respectively. PostgreSQL stores its data in the named `postgres-data` volume.
+The values in `.env.example` are development-only. `.env` is ignored by Git; use
+`.envrc.local` for local overrides. No manual Keycloak console setup is needed. The
+PostgreSQL service creates a separate `pagerune_keycloak` database idempotently, and
+Keycloak imports the realm, client, group, and development user at startup.
 
-The locally running Rust application uses `DATABASE_URL` from `.env` to connect to PostgreSQL at `127.0.0.1:5432`. The example's database name, user, and password match the Compose variables. SMTP settings point at Mailpit (`SMTP_HOST=127.0.0.1`, `SMTP_PORT=1025`, `SMTP_TLS_MODE=none`, empty auth, `SMTP_FROM_EMAIL=updates@localhost`, `SMTP_FROM_NAME=PageRune`).
+## Compose application workflow
 
-Apply the versioned SQLx migrations before starting the application:
+The default Compose workflow runs PostgreSQL, Keycloak, PageRune, OAuth2 Proxy, and Mailpit.
+Only OAuth2 Proxy is published for PageRune traffic, at `127.0.0.1:8088`; the backend is
+on private Compose networks and has no host-published port. Public site: <http://localhost:8088>.
+Website management: <http://localhost:8088/management>. Sign in as `admin` / `admin`.
+Keycloak uses the browser-visible issuer <http://keycloak.localhost:8081/realms/pagerune>;
+the `auth` network DNS alias maps that same hostname to Keycloak for OAuth2 Proxy, preserving
+exact issuer validation without assigning a fixed container IP or subnet.
+Mailpit is at <http://127.0.0.1:8025>.
+
+OAuth2 Proxy routes to PageRune over the private Compose network. Its explicit public path
+rules preserve subscription registration, verification, subscriber email management,
+unsubscribe, landing, and assets. Unauthenticated management page requests redirect
+straight to Keycloak. Management paths require membership in the imported
+`pagerune-management` group. The `/management` logout link clears the local proxy session;
+the next management request starts authentication again. Keycloak may silently reuse its
+own browser SSO session.
+
+The Compose app applies embedded SQLx migrations through a one-shot service before startup.
+Run `direnv exec . docker compose up -d --build` after source changes. PostgreSQL data is
+retained in `postgres-data`; `docker compose down -v` deletes it.
+
+## Host-run Devbox workflow
+
+To run PageRune under Devbox while retaining Keycloak and OAuth2 Proxy, stop the default
+proxy/app services and start the host-mode proxy profile:
 
 ```sh
-direnv exec . devbox run migrate
+direnv exec . docker compose stop oauth2-proxy pagerune
+direnv exec . docker compose --profile host-app up -d postgres mailpit keycloak oauth2-proxy-host
 ```
 
-Migrations create the monitoring, notification and public subscription tables. The phase 4
-local setup uses a clean development database; no migration re-verifies legacy subscribers.
-Run this command again after pulling new migrations.
-
-## Run PageRune and checks
-
-Run the server locally. The worker sends email for changes detected after subscription; baseline fetches remain silent:
+The host-mode proxy reaches the host process at the Docker bridge gateway on port 8082.
+Get the gateway and run migrations and PageRune bound to that interface:
 
 ```sh
-direnv exec . devbox run run
+GATEWAY=$(direnv exec . docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')
+direnv exec . env PAGERUNE_BIND="$GATEWAY:8082" PAGERUNE_TRUSTED_PROXY_MODE=true PAGERUNE_PUBLIC_BASE_URL=http://localhost:8088 devbox run migrate
+direnv exec . env PAGERUNE_BIND="$GATEWAY:8082" PAGERUNE_TRUSTED_PROXY_MODE=true PAGERUNE_PUBLIC_BASE_URL=http://localhost:8088 devbox run run
 ```
 
-In another terminal, run the configured check suite:
+OAuth2 Proxy uses `host.docker.internal:8082`; the host PageRune process does not use port
+8088, which remains the browser-facing proxy port. This listener is a local development
+transport and is reachable from the host itself. Production must use private service
+networking, an authenticated HTTPS ingress, Secure cookies, and production credentials.
+
+The existing direct host workflow remains available when authentication is not needed:
+start PostgreSQL and Mailpit, run `direnv exec . devbox run migrate`, then
+`direnv exec . devbox run run` with the default loopback bind. Do not expose this direct
+development listener.
+
+To switch back to the default Compose app, stop the host proxy first so it releases port
+8088, then run `direnv exec . docker compose up -d --build`.
+
+## Checks and email
+
+Run the existing suite with:
 
 ```sh
 direnv exec . devbox run check
 ```
 
-Available Devbox scripts are:
+This checks formatting, Clippy, unit tests, and PostgreSQL integration tests. For local
+Compose authentication checks, start the stack and run `python3 tests/compose-auth.py`.
 
-- `devbox run run`: run PageRune with Cargo.
-- `devbox run migrate`: apply embedded SQLx migrations to `DATABASE_URL`.
-- `devbox run check`: check formatting, run Clippy with warnings denied, and run unit and PostgreSQL integration tests.
-- `devbox run test`: run tests only.
-- `devbox run fmt` / `devbox run fmt-check`: format Rust code or verify formatting.
-- `devbox run lint`: run Clippy with warnings denied.
-- `devbox run build` / `devbox run build-release`: build debug or release binaries.
-
-Prefix these with `direnv exec .` if direnv has not already loaded the project environment in the current shell. `DATABASE_URL` is required at startup. The server binds to `127.0.0.1:8080` by default. Swagger UI is available at <http://127.0.0.1:8080/swagger-ui/> and the generated OpenAPI document at <http://127.0.0.1:8080/api/openapi.json>. Mailpit's web interface is <http://127.0.0.1:8025>.
-
-## Verify an email in Mailpit
-
-1. Start PostgreSQL and Mailpit with `direnv exec . docker compose up -d`.
-2. Apply migrations and start PageRune using the commands above.
-3. Open Swagger at <http://127.0.0.1:8080/swagger-ui/>. With the development API enabled, register a public monitored website using `POST /api/v1/sites`.
-4. Create a subscription using `POST /api/v1/sites/{site_id}/subscriptions` with an email address as `subscriber_identity`.
-5. Wait for a later check to detect a content change (the initial baseline does not notify).
-6. Open <http://localhost:8025> and inspect the captured email. It includes the source URL, detection time and stable change UUID, but no page snapshot.
-
-To speed up local checks, set the site's `interval_seconds` to the five-minute minimum. Fetching rejects loopback/private URLs, so use a public HTTP(S) website. Mailpit captures SMTP locally; no email is delivered externally.
-
-## Inspect and stop services
-
-Check service status and view logs with Compose:
-
-```sh
-direnv exec . docker compose ps
-direnv exec . docker compose logs -f postgres mailpit
-```
-
-Stop and remove the containers while retaining PostgreSQL data in the named volume:
-
-```sh
-direnv exec . docker compose down
-```
-
-### Destructive: delete local database data
-
-The following command also removes Compose-managed volumes, including `postgres-data`, and permanently deletes the local PostgreSQL data:
-
-```sh
-direnv exec . docker compose down -v
-```
-
-## Implemented and planned functionality
-
-The application provides the Axum API, PostgreSQL persistence, generated OpenAPI/Swagger,
-health/readiness, per-site public subscription pages, double opt-in, management sessions,
-asynchronous site checks, hash-based change history, SSRF restrictions, and PostgreSQL
-leases with fencing. Site registration and other business API routes remain disabled unless
-`PAGERUNE_DEV_API_ENABLED=true`; this requires a loopback bind and is only for local/private
-owner access.
-
-OIDC, tenant membership, owner UI, daily digest, and public change pages remain
-unimplemented. Public email is double-opt-in. The example environment enables a fixed
-human-verification test response only on loopback; production must configure Turnstile keys
-and disable test mode. Mailpit captures verification, management, and notification email.
+Edit `templates/email/change.html` and `templates/email/change.txt` while the app runs;
+the next notification uses those changes without recompilation. Mailpit captures SMTP
+locally, and no email is delivered externally.

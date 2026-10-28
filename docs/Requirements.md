@@ -10,7 +10,7 @@ one daily combined message if any selected pages changed.
 - Rust application, PostgreSQL operated by CloudNativePG; no SQLite.
 - Stateless, interchangeable app replicas, no local persistent volume or sticky sessions.
 - Configurable SMTP host/port/auth/from/TLS via environment and Kubernetes secrets.
-- No OIDC or subscriber accounts in the public self-service subscription phase. The current site-registration API remains disabled by default and loopback-only; owner access is private/operator-mediated.
+- No OIDC or subscriber accounts in the public self-service subscription phase. Administrative login is a separate local Keycloak/OAuth2 Proxy concern; subscriber access remains email-token based.
 - Every API documented in generated OpenAPI and available through bundled Swagger UI.
 - Minimal owner UI: sites, watches, pause/edit, latest check/error and ready-to-copy links.
 - Public site-specific subscription pages are enabled explicitly per monitored site (default off); visitors cannot register arbitrary sites.
@@ -32,9 +32,62 @@ one daily combined message if any selected pages changed.
   leases/fencing across replicas. The daily digest schedule remains a separate later feature.
 - Current content hashes and lightweight change records are retained; page snapshots and
   public change pages remain out of scope. Change records have stable UUIDs for future URLs.
-- Until authentication is delivered, the business API is disabled by default and can only
-  be enabled for development on a loopback bind. Subscriber identities are opaque labels,
-  not authentication credentials.
+- Before the local authentication phase, the business API is disabled by default and may
+  be enabled on a host loopback bind for development. With the local proxy stack, it is
+  enabled only on the unpublished PageRune container port behind OAuth2 Proxy. Subscriber
+  identities are opaque labels, not authentication credentials.
+
+## Phase 5 requirements adjustment
+The accepted Phase 2 development API and Phase 4 Turnstile test-mode requirements were
+loopback-only. This phase narrowly extends those development settings to the local Compose
+topology: they may run on the private backend listener when trusted proxy mode is explicitly
+enabled. Direct host development remains loopback-only, and neither setting is a production
+security boundary.
+
+## Phase 5 local management authentication
+- Keycloak provides OIDC identity for local administrative access; OAuth2 Proxy enforces
+  the management group at the HTTP boundary. OIDC authentication logic is not added to Rust.
+- The declarative local `pagerune` realm includes the `pagerune-management` client and
+  group, plus the development-only `admin` / `admin` account. The import is automatic.
+- The initial owner UI is an authenticated landing page. Phase 6 replaces it with the
+  website management interface; business APIs, OpenAPI and Swagger remain proxy-protected.
+- Public landing, subscription, verification, email-token subscriber management and
+  unsubscribe routes remain unauthenticated at the proxy. Subscriber `/manage` continues
+  to require its existing email-token flow.
+- Compose publishes OAuth2 Proxy only for PageRune traffic; the backend port is not
+  published. Host-run Devbox mode remains available for local development and connects
+  through the Docker bridge gateway. Neither local HTTP nor the seeded credentials are
+  production configuration.
+- Authentication through a management group does not implement tenant membership or
+  per-resource authorization. Those remain application requirements for the authenticated
+  owner product phase.
+
+## Phase 6 website management UI
+- Authenticated administrators can list, register, edit, pause/resume, and remove monitored
+  websites using the existing Keycloak/OAuth2 Proxy boundary and server-rendered Rust UI.
+- Each monitored website has a required display name and a `monitoring_enabled` flag. Existing
+  websites remain enabled after migration; newly registered websites use the existing
+  24-hour interval and public subscriptions remain disabled by default.
+- Administrators can update the existing check interval (300 seconds to 30 days) along with
+  name, URL, monitoring enabled state, and the independent public subscription setting.
+- Website registration includes an “Allow public subscriptions” option, disabled by default;
+  administrators can change it when editing a website without changing monitoring state.
+- The management list shows monitoring status, last check, latest detected change, and the
+  count of active subscribers. Site listing is paginated.
+- The management list always displays each site's permanent absolute `/subscribe/{site_id}`
+  URL from the configured public base URL, with View and Copy link actions and an explicit
+  Enabled or Disabled subscription state. Disabled sites still reject new public subscriptions.
+- Editing a URL preserves the site identity, subscriptions, and lightweight change history.
+  A URL change clears fetch validators, current check timestamps, and the baseline; its first
+  successful check establishes a new silent baseline.
+- Disabling monitoring preserves subscriptions and history but prevents scheduler claims.
+  Re-enabling makes a site due through PostgreSQL without restarting the application.
+- Removing a website permanently cascades subscriptions, their tokens and pending
+  notifications, plus monitoring history. Pending verification email jobs are removed;
+  management email jobs unrelated to that site remain. An in-flight bounded send completes
+  before deletion; SMTP-accepted mail cannot be recalled.
+- Management browser writes require one-use PostgreSQL-backed CSRF nonces. Public
+  subscription, verification, subscriber management, and unsubscribe flows remain intact.
 
 ## Phase 3 email notifications
 - A detected change and one outbox notification per active subscription are committed atomically; initial baselines and unchanged checks are silent.
@@ -48,7 +101,7 @@ one daily combined message if any selected pages changed.
 ## Phase 4 public subscriptions
 - Site registration returns a permanent `/subscribe/{site_id}` URL. `public_subscriptions_enabled` defaults to false and is controlled through the private development API. Disabled sites reject public enrollment.
 - Visitors submit only an email and a server-validated human-verification response; the site URL and interval are fixed by the registered monitored site. The interval defaults to 24 hours and remains subject to the five-minute minimum at site registration.
-- Cloudflare Turnstile is the first replaceable human-verification adapter. Development test mode is loopback-only and is not a CAPTCHA provider or production option.
+- Cloudflare Turnstile is the first replaceable human-verification adapter. Development test mode is permitted only for loopback development or the explicitly trusted local Compose proxy; it is not a CAPTCHA provider or production option.
 - Pending subscriptions are stored in PostgreSQL and deduplicated by normalized email and site. A generic response is returned whether the address is new, pending, or already active.
 - Verification tokens are high-entropy purpose-scoped capabilities, stored by hash and expiring after 24 hours. GET is read-only; a one-use CSRF nonce is required for POST activation.
 - Verification and management email requests use a PostgreSQL outbox, leased across replicas. SMTP work occurs after the transaction commits. Outbox rows store token IDs; purpose-scoped tokens are deterministically regenerated with a deployment secret, while PostgreSQL stores only token hashes.

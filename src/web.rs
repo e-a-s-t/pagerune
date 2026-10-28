@@ -1,7 +1,7 @@
-use crate::{AppState, notifications::SmtpConfig};
+use crate::{AppState, fetcher::normalize_url, notifications::SmtpConfig};
 use axum::{
     Form, Router,
-    extract::{ConnectInfo, DefaultBodyLimit, Path, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     routing::get,
@@ -103,6 +103,46 @@ pub struct UnsubscribeForm {
     csrf: String,
 }
 
+#[derive(Deserialize)]
+struct ManagementCreateForm {
+    name: String,
+    url: String,
+    public_subscriptions_enabled: Option<String>,
+    csrf: String,
+}
+#[derive(Deserialize)]
+struct ManagementEditForm {
+    name: String,
+    url: String,
+    interval_seconds: String,
+    monitoring_enabled: Option<String>,
+    public_subscriptions_enabled: Option<String>,
+    csrf: String,
+}
+#[derive(Deserialize)]
+struct ManagementDeleteForm {
+    csrf: String,
+}
+#[derive(Deserialize)]
+struct ManagementQuery {
+    page: Option<i64>,
+    notice: Option<String>,
+}
+#[derive(Serialize, FromRow)]
+struct ManagementSite {
+    id: Uuid,
+    name: String,
+    original_url: String,
+    current_status: String,
+    last_checked_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_detected_change_at: Option<chrono::DateTime<chrono::Utc>>,
+    active_subscriber_count: i64,
+    monitoring_enabled: bool,
+    interval_seconds: i32,
+    last_error: Option<String>,
+    public_subscriptions_enabled: bool,
+}
+
 #[derive(Serialize, FromRow)]
 struct ManagedSubscription {
     id: Uuid,
@@ -124,6 +164,16 @@ struct ActionEmail {
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/management", get(management).post(management_create))
+        .route("/management/", get(management))
+        .route(
+            "/management/{id}/edit",
+            get(management_edit_page).post(management_edit),
+        )
+        .route(
+            "/management/{id}/delete",
+            get(management_delete_page).post(management_delete),
+        )
         .route("/", get(index))
         .route("/subscribe/{site_id}", get(subscribe_page).post(subscribe))
         .route("/verify/{token}", get(verify_page).post(verify))
@@ -184,10 +234,14 @@ fn render(template: &str, values: minijinja::Value) -> Response {
         "verify.html" => include_str!("../templates/web/verify.html"),
         "manage.html" => include_str!("../templates/web/manage.html"),
         "manage_link.html" => include_str!("../templates/web/manage_link.html"),
+        "management.html" => include_str!("../templates/web/management.html"),
+        "management_edit.html" => include_str!("../templates/web/management_edit.html"),
+        "management_delete.html" => include_str!("../templates/web/management_delete.html"),
         "error.html" => include_str!("../templates/web/error.html"),
         _ => include_str!("../templates/web/error.html"),
     };
     let mut env = Environment::new();
+    env.set_auto_escape_callback(|_| minijinja::AutoEscape::Html);
     env.add_template("base.html", include_str!("../templates/web/base.html"))
         .expect("bundled base template parses");
     env.add_template("page", source)
@@ -224,6 +278,320 @@ fn token_response(template: &str, values: minijinja::Value) -> Response {
         .headers_mut()
         .insert("cache-control", HeaderValue::from_static("no-store"));
     response
+}
+
+async fn management(
+    State(state): State<AppState>,
+    Query(query): Query<ManagementQuery>,
+) -> Response {
+    let page_number = query.page.unwrap_or(1).max(1);
+    let notice = match query.notice.as_deref() {
+        Some("created") => "Website registered successfully.",
+        Some("updated") => "Website updated successfully.",
+        Some("deleted") => "Website removed.",
+        Some("duplicate") => "That URL is already registered.",
+        _ => "",
+    };
+    management_page(&state, page_number, notice, "", "", "", false).await
+}
+
+async fn management_page(
+    state: &AppState,
+    page_number: i64,
+    notice: &str,
+    error: &str,
+    form_name: &str,
+    form_url: &str,
+    form_public_subscriptions_enabled: bool,
+) -> Response {
+    let csrf = match nonce(&state.database, "management_create", None).await {
+        Ok(value) => value,
+        Err(_) => return generic_error(),
+    };
+    let limit = 25_i64;
+    let total: i64 = match sqlx::query_scalar("SELECT count(*) FROM monitored_sites")
+        .fetch_one(&state.database)
+        .await
+    {
+        Ok(total) => total,
+        Err(_) => return generic_error(),
+    };
+    let sites = match sqlx::query_as::<_, ManagementSite>("SELECT ms.id, ms.name, ms.original_url, ms.current_status, ms.last_checked_at, (SELECT max(sc.detected_at) FROM site_changes sc WHERE sc.site_id=ms.id) AS last_detected_change_at, (SELECT count(*) FROM subscriptions s WHERE s.site_id=ms.id AND s.status='active') AS active_subscriber_count, ms.monitoring_enabled, ms.interval_seconds, ms.last_error, ms.public_subscriptions_enabled FROM monitored_sites ms ORDER BY ms.created_at DESC, ms.id LIMIT $1 OFFSET $2")
+        .bind(limit).bind((page_number - 1) * limit).fetch_all(&state.database).await { Ok(sites) => sites, Err(_) => return generic_error() };
+    let sites: Vec<_> = sites.into_iter().map(|site| serde_json::json!({
+        "id": site.id.to_string(), "name": site.name, "original_url": site.original_url,
+        "subscription_url": subscription_url(&state.public_base_url, site.id),
+        "public_subscriptions_enabled": site.public_subscriptions_enabled,
+        "current_status": site.current_status, "monitoring_enabled": site.monitoring_enabled,
+        "active_subscriber_count": site.active_subscriber_count,
+        "last_error": site.last_error, "interval_seconds": site.interval_seconds,
+        "interval_text": format_interval(site.interval_seconds),
+        "last_checked_at": site.last_checked_at.map(|date| date.to_rfc3339()),
+        "last_detected_change_at": site.last_detected_change_at.map(|date| date.to_rfc3339()),
+    })).collect();
+    let pages = ((total + limit - 1) / limit).max(1);
+    admin_page(
+        "management.html",
+        context! { sites => sites, csrf => csrf, notice => notice, error => error, form_name => form_name, form_url => form_url, form_public_subscriptions_enabled => form_public_subscriptions_enabled, page => page_number, pages => pages, total => total },
+    )
+}
+
+fn subscription_url(public_base_url: &str, site_id: Uuid) -> String {
+    format!(
+        "{}/subscribe/{site_id}",
+        public_base_url.trim_end_matches('/')
+    )
+}
+
+fn admin_page(template: &str, values: minijinja::Value) -> Response {
+    let mut response = page(template, values);
+    response
+        .headers_mut()
+        .insert("cache-control", HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    response
+}
+
+async fn management_create(
+    State(state): State<AppState>,
+    Form(input): Form<ManagementCreateForm>,
+) -> Response {
+    let name = input.name.trim();
+    let public_subscriptions_enabled =
+        input.public_subscriptions_enabled.as_deref() == Some("true");
+    if name.is_empty() || name.chars().count() > 200 || normalize_url(&input.url).is_err() {
+        return management_create_error(
+            &state,
+            "Enter a name of 1 to 200 characters and a valid HTTP or HTTPS URL.",
+            name,
+            &input.url,
+            public_subscriptions_enabled,
+        )
+        .await;
+    }
+    let mut tx = match state.database.begin().await {
+        Ok(tx) => tx,
+        Err(_) => return generic_error(),
+    };
+    if !consume_nonce(&mut tx, &input.csrf, "management_create", None).await {
+        let _ = tx.rollback().await;
+        return management_create_error(
+            &state,
+            "This form expired. Please try again.",
+            name,
+            &input.url,
+            public_subscriptions_enabled,
+        )
+        .await;
+    }
+    if tx.commit().await.is_err() {
+        return generic_error();
+    }
+    match crate::api::create_site(
+        State(state.clone()),
+        axum::Json(crate::api::CreateSite {
+            name: name.to_owned(),
+            url: input.url.trim().to_owned(),
+            interval_seconds: 86_400,
+            public_subscriptions_enabled,
+        }),
+    )
+    .await
+    {
+        Ok((StatusCode::CREATED, _)) => Redirect::to("/management?notice=created").into_response(),
+        Ok(_) => Redirect::to("/management?notice=duplicate").into_response(),
+        Err(error) if error.1 == "duplicate_url" => {
+            management_create_error(
+                &state,
+                "That URL is already registered.",
+                name,
+                &input.url,
+                public_subscriptions_enabled,
+            )
+            .await
+        }
+        Err(_) => generic_error(),
+    }
+}
+
+async fn management_create_error(
+    state: &AppState,
+    error: &str,
+    name: &str,
+    url: &str,
+    public_subscriptions_enabled: bool,
+) -> Response {
+    management_page(state, 1, "", error, name, url, public_subscriptions_enabled).await
+}
+
+async fn management_edit_page(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
+    management_edit_render(&state, id, "", None, None, None, None).await
+}
+
+async fn management_edit_render(
+    state: &AppState,
+    id: Uuid,
+    error: &str,
+    form_name: Option<&str>,
+    form_url: Option<&str>,
+    form_interval: Option<&str>,
+    form_public_subscriptions_enabled: Option<bool>,
+) -> Response {
+    let site = match sqlx::query_as::<_, ManagementSite>("SELECT ms.id, ms.name, ms.original_url, ms.current_status, ms.last_checked_at, (SELECT max(sc.detected_at) FROM site_changes sc WHERE sc.site_id=ms.id) AS last_detected_change_at, (SELECT count(*) FROM subscriptions s WHERE s.site_id=ms.id AND s.status='active') AS active_subscriber_count, ms.monitoring_enabled, ms.interval_seconds, ms.last_error, ms.public_subscriptions_enabled FROM monitored_sites ms WHERE ms.id=$1").bind(id).fetch_optional(&state.database).await {
+        Ok(Some(site)) => site, Ok(None) => return not_found("Website not found."), Err(_) => return generic_error(),
+    };
+    let csrf = match nonce(&state.database, "management_edit", Some(id)).await {
+        Ok(value) => value,
+        Err(_) => return generic_error(),
+    };
+    let form_name = form_name.unwrap_or(&site.name).to_owned();
+    let form_url = form_url.unwrap_or(&site.original_url).to_owned();
+    let form_interval = form_interval
+        .map(str::to_owned)
+        .unwrap_or_else(|| site.interval_seconds.to_string());
+    let form_public_subscriptions_enabled =
+        form_public_subscriptions_enabled.unwrap_or(site.public_subscriptions_enabled);
+    admin_page(
+        "management_edit.html",
+        context! { site => site, csrf => csrf, error => error, form_name => form_name, form_url => form_url, form_interval => form_interval, form_public_subscriptions_enabled => form_public_subscriptions_enabled },
+    )
+}
+
+async fn management_edit(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Form(input): Form<ManagementEditForm>,
+) -> Response {
+    let name = input.name.trim();
+    if name.is_empty() || name.chars().count() > 200 || normalize_url(&input.url).is_err() {
+        return management_edit_render(
+            &state,
+            id,
+            "Enter a name of 1 to 200 characters and a valid HTTP or HTTPS URL.",
+            Some(&input.name),
+            Some(&input.url),
+            Some(&input.interval_seconds),
+            Some(input.public_subscriptions_enabled.as_deref() == Some("true")),
+        )
+        .await;
+    }
+    let interval_seconds = match input.interval_seconds.parse::<i32>() {
+        Ok(seconds) if (300..=2_592_000).contains(&seconds) => seconds,
+        _ => {
+            return management_edit_render(
+                &state,
+                id,
+                "Check interval must be between 300 and 2,592,000 seconds.",
+                Some(&input.name),
+                Some(&input.url),
+                Some(&input.interval_seconds),
+                Some(input.public_subscriptions_enabled.as_deref() == Some("true")),
+            )
+            .await;
+        }
+    };
+    let monitoring_enabled = input.monitoring_enabled.as_deref() == Some("true");
+    let mut tx = match state.database.begin().await {
+        Ok(tx) => tx,
+        Err(_) => return generic_error(),
+    };
+    if !consume_nonce(&mut tx, &input.csrf, "management_edit", Some(id)).await {
+        let _ = tx.rollback().await;
+        return management_edit_render(
+            &state,
+            id,
+            "This form expired. Please try again.",
+            Some(&input.name),
+            Some(&input.url),
+            Some(&input.interval_seconds),
+            Some(input.public_subscriptions_enabled.as_deref() == Some("true")),
+        )
+        .await;
+    }
+    if tx.commit().await.is_err() {
+        return generic_error();
+    }
+    match crate::api::update_site(
+        State(state.clone()),
+        Path(id),
+        axum::Json(crate::api::UpdateSite {
+            name: Some(name.to_owned()),
+            url: Some(input.url.trim().to_owned()),
+            interval_seconds: Some(interval_seconds),
+            public_subscriptions_enabled: Some(
+                input.public_subscriptions_enabled.as_deref() == Some("true"),
+            ),
+            monitoring_enabled: Some(monitoring_enabled),
+        }),
+    )
+    .await
+    {
+        Ok(_) => Redirect::to("/management?notice=updated").into_response(),
+        Err(error) if error.1 == "duplicate_url" => {
+            management_edit_render(
+                &state,
+                id,
+                "That URL is already registered.",
+                Some(&input.name),
+                Some(&input.url),
+                Some(&input.interval_seconds),
+                Some(input.public_subscriptions_enabled.as_deref() == Some("true")),
+            )
+            .await
+        }
+        Err(error) if error.1 == "not_found" => not_found("Website not found."),
+        Err(_) => generic_error(),
+    }
+}
+
+async fn management_delete_page(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
+    let site = match sqlx::query_as::<_, (String, String)>(
+        "SELECT name, original_url FROM monitored_sites WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_optional(&state.database)
+    .await
+    {
+        Ok(Some(site)) => site,
+        Ok(None) => return not_found("Website not found."),
+        Err(_) => return generic_error(),
+    };
+    let csrf = match nonce(&state.database, "management_delete", Some(id)).await {
+        Ok(value) => value,
+        Err(_) => return generic_error(),
+    };
+    admin_page(
+        "management_delete.html",
+        context! { id => id.to_string(), name => site.0, url => site.1, csrf => csrf },
+    )
+}
+
+async fn management_delete(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Form(input): Form<ManagementDeleteForm>,
+) -> Response {
+    let mut tx = match state.database.begin().await {
+        Ok(tx) => tx,
+        Err(_) => return generic_error(),
+    };
+    if !consume_nonce(&mut tx, &input.csrf, "management_delete", Some(id)).await {
+        let _ = tx.rollback().await;
+        return (
+            StatusCode::BAD_REQUEST,
+            "This confirmation expired. Please review the website again.",
+        )
+            .into_response();
+    }
+    if tx.commit().await.is_err() {
+        return generic_error();
+    }
+    match crate::api::delete_site(State(state), Path(id)).await {
+        Ok(_) => Redirect::to("/management?notice=deleted").into_response(),
+        Err(error) => error.into_response(),
+    }
 }
 
 #[utoipa::path(get, path = "/", tag = "Public web", responses((status = 200, description = "PageRune public landing page")))]
@@ -973,6 +1341,72 @@ mod tests {
             assert_eq!(format_interval(seconds), expected);
         }
         assert_eq!(format_interval(61), "Every 61 seconds");
+    }
+
+    #[test]
+    fn subscription_url_uses_configured_public_origin_and_stable_site_id() {
+        let site_id = Uuid::parse_str("f56f3e71-4f64-4f10-a246-084d38c3816f").unwrap();
+        assert_eq!(
+            subscription_url("https://public.example/pagerune///", site_id),
+            format!("https://public.example/pagerune/subscribe/{site_id}")
+        );
+    }
+
+    #[tokio::test]
+    async fn management_template_renders_and_escapes_site_names() {
+        let response = render(
+            "management.html",
+            context! {
+                sites => vec![serde_json::json!({
+                    "id": Uuid::new_v4().to_string(),
+                    "name": "<script>alert(1)</script>",
+                    "original_url": "https://example.test/",
+                    "subscription_url": "https://public.example/subscribe/f56f3e71-4f64-4f10-a246-084d38c3816f?x=1&y=2",
+                    "public_subscriptions_enabled": false,
+                    "current_status": "ok",
+                    "monitoring_enabled": true,
+                    "active_subscriber_count": 2,
+                    "interval_text": "Every day",
+                    "last_error": Option::<String>::None,
+                    "last_checked_at": Option::<String>::None,
+                    "last_detected_change_at": Option::<String>::None,
+                })],
+                csrf => "nonce",
+                notice => "",
+                error => "",
+                form_name => "",
+                form_url => "",
+                page => 1,
+                pages => 1,
+                total => 1,
+            },
+        );
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = String::from_utf8(
+            axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(
+            html.contains("&lt;script&gt;alert(1)&lt;&#x2f;script&gt;"),
+            "{html}"
+        );
+        assert!(!html.contains("<script>alert(1)</script>"), "{html}");
+        assert!(html.contains("Subscriptions Disabled"), "{html}");
+        assert!(
+            html.contains(
+                "https:&#x2f;&#x2f;public.example&#x2f;subscribe&#x2f;f56f3e71-4f64-4f10-a246-084d38c3816f?x=1&amp;y=2"
+            ),
+            "{html}"
+        );
+        assert!(
+            html.contains("target=\"_blank\" rel=\"noopener noreferrer\">View</a>"),
+            "{html}"
+        );
+        assert!(html.contains("data-copy-url=\"https:&#x2f;&#x2f;public.example&#x2f;subscribe&#x2f;f56f3e71-4f64-4f10-a246-084d38c3816f?x=1&amp;y=2\""), "{html}");
+        assert!(html.contains("Register a website"));
     }
 
     #[test]

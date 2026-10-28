@@ -13,8 +13,8 @@ The initial migration is an empty baseline; no product tables are created.
 Persist normalized monitored URLs and subscriptions, asynchronously fetch HTTP(S) content,
 track SHA-256 baselines and metadata-only changes, and coordinate due checks with expiring
 PostgreSQL leases and fencing. Expose paginated site, subscription and change APIs with
-generated OpenAPI. Until authentication exists, the business API is disabled by default;
-development access requires explicit opt-in and a loopback bind. Polling defaults to 24
+generated OpenAPI. Direct host development access requires explicit opt-in and a loopback
+bind; the local Compose stack uses the OAuth2 Proxy boundary. Polling defaults to 24
 hours and is configurable per site (minimum five minutes).
 
 ## Phase 3 — email notifications (implemented)
@@ -30,17 +30,19 @@ PostgreSQL-backed verification/management email jobs, expiring hashed tokens, CS
 email management sessions, unsubscribe, rate limits and server-rendered templates. No OIDC
 or subscriber accounts are introduced.
 
-## Later — authenticated owner interface
-Add tenant membership and OIDC SSO only when owner dashboard/API requirements are selected.
-Keep the existing private development API gate until a secure replacement is designed.
+## Phase 6 — authenticated website management (implemented)
+Keycloak plus OAuth2 Proxy protect the server-rendered Management UI and current development
+API. Administrators manage named monitored websites, monitoring state, active subscriber
+counts, and deletion through PostgreSQL. Tenant membership and per-resource authorization
+remain future work.
 
-## Phase 6 — daily digest
+## Phase 7 — daily digest
 Normalize public static HTML (text + hrefs), implement durable daily cycles, cutoff/sealing,
 deduplicated digest/outbox and retry handling. Checks may run at configured intervals, while
 digest delivery remains a separate daily schedule. Direct source links only. Validate
 simultaneous replicas and crash recovery against real PostgreSQL.
 
-## Phase 7 — operational release
+## Phase 8 — operational release
 Validated environment configuration; application/migration container builds; Deployment,
 Service, ingress/Gateway, probes, resources and policies. CNPG backup/restore runbook,
 metrics/alerts, retention cleanup, contract checks and chosen-host CI using Devbox.

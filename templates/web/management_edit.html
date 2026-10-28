@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Edit website — PageRune</title><link rel="stylesheet" href="/static/pagerune.css"></head>
+  <body>
+    <header class="site-header"><a class="brand" href="/management">PageRune management</a><a class="button button-small button-quiet" href="/oauth2/sign_out?rd=%2F">Log out</a></header>
+    <main class="shell"><section class="management-panel form-panel">
+      <a class="back-link" href="/management">← All websites</a><p class="eyebrow">Website settings</p><h1>Edit website</h1>
+      {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+      <form method="post" action="/management/{{ site.id }}/edit" class="management-form">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <label for="name">Website name</label><input id="name" name="name" type="text" maxlength="200" required value="{{ form_name }}">
+        <label for="url">Website URL</label><input id="url" name="url" type="url" required inputmode="url" value="{{ form_url }}">
+        <label for="interval_seconds">Check interval (seconds)</label><input id="interval_seconds" name="interval_seconds" type="number" min="300" max="2592000" step="1" required value="{{ form_interval }}"><small class="form-note">Choose between 300 seconds (5 minutes) and 2,592,000 seconds (30 days).</small>
+        <label class="checkbox-label"><input type="checkbox" name="monitoring_enabled" value="true" {% if site.monitoring_enabled %}checked{% endif %}> Monitoring enabled</label>
+        <label class="checkbox-label"><input type="checkbox" name="public_subscriptions_enabled" value="true" {% if form_public_subscriptions_enabled %}checked{% endif %}> Allow public subscriptions</label>
+        <p class="form-note">Changing the URL preserves the website identity, subscribers, and recorded change history. The new URL will establish a fresh baseline on its first successful check.</p>
+        <div class="button-row"><button class="button" type="submit">Save changes</button><a class="button button-quiet" href="/management">Cancel</a></div>
+      </form>
+    </section></main>
+    <footer class="footer">Website updates, delivered with care.</footer>
+  </body>
+</html>

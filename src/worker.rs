@@ -33,7 +33,7 @@ pub async fn run(state: AppState, fetch_config: FetchConfig) {
 async fn claim(pool: &sqlx::PgPool) -> Result<Option<Job>, sqlx::Error> {
     let owner = Uuid::new_v4();
     sqlx::query_as::<_, Job>(
-        "WITH due AS (SELECT id FROM monitored_sites WHERE next_check_at <= now() AND (lease_expires_at IS NULL OR lease_expires_at <= now()) ORDER BY next_check_at, id FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE monitored_sites s SET lease_owner=$1, lease_expires_at=now() + interval '180 seconds', lease_generation=s.lease_generation+1, updated_at=now() FROM due WHERE s.id=due.id RETURNING s.id, s.normalized_url AS url, s.etag, s.last_modified, s.interval_seconds, s.lease_owner, s.lease_generation"
+        "WITH due AS (SELECT id FROM monitored_sites WHERE monitoring_enabled=true AND next_check_at <= now() AND (lease_expires_at IS NULL OR lease_expires_at <= now()) ORDER BY next_check_at, id FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE monitored_sites s SET lease_owner=$1, lease_expires_at=now() + interval '180 seconds', lease_generation=s.lease_generation+1, updated_at=now() FROM due WHERE s.id=due.id AND s.monitoring_enabled=true RETURNING s.id, s.normalized_url AS url, s.etag, s.last_modified, s.interval_seconds, s.lease_owner, s.lease_generation"
     ).bind(owner).fetch_optional(pool).await
 }
 
@@ -161,7 +161,7 @@ mod tests {
         let url = format!("https://example.com/worker-test/{site_id}");
         sqlx::query("UPDATE monitored_sites SET next_check_at=now()+interval '1 day', lease_expires_at=NULL")
             .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO monitored_sites (id, original_url, normalized_url, next_check_at) VALUES ($1,$2,$2,now())")
+        sqlx::query("INSERT INTO monitored_sites (id, name, original_url, normalized_url, monitoring_enabled, next_check_at) VALUES ($1,'Scheduler test',$2,$2,false,now())")
             .bind(site_id).bind(&url).execute(&pool).await.unwrap();
         let subscription_ids = [Uuid::new_v4(), Uuid::new_v4()];
         for (id, recipient) in subscription_ids
@@ -186,6 +186,15 @@ mod tests {
             human_verifier: std::sync::Arc::new(crate::web::DevelopmentTestVerifier),
         };
 
+        assert!(
+            claim(&pool).await.unwrap().is_none(),
+            "disabled site is never claimed"
+        );
+        sqlx::query("UPDATE monitored_sites SET monitoring_enabled=true WHERE id=$1")
+            .bind(site_id)
+            .execute(&pool)
+            .await
+            .unwrap();
         let (left, right) = tokio::join!(claim(&pool), claim(&pool));
         let first = left
             .unwrap()

@@ -3,17 +3,18 @@
 ## Current implementation
 Generated OpenAPI: `GET /api/openapi.json`. Bundled Swagger UI: `GET /swagger-ui/`.
 Operational routes: `GET /healthz` and `GET /readyz` (200 or 503 based on PostgreSQL).
-Business routes are under `/api/v1`. They are disabled by default. Set
-`PAGERUNE_DEV_API_ENABLED=true` only for development and bind `PAGERUNE_BIND` to loopback;
-startup rejects enabling this mode on a non-loopback bind. This temporary mode is not
-authentication and must not be exposed publicly. Error responses use
+Business routes are under `/api/v1`. In direct host development they are disabled by
+default; `PAGERUNE_DEV_API_ENABLED=true` is limited to a loopback bind. The local Compose
+stack enables them on an unpublished backend listener and exposes them only through
+OAuth2 Proxy. `PAGERUNE_TRUSTED_PROXY_MODE` is a deployment declaration, not authentication;
+never enable it unless network policy prevents direct access to the backend. Error responses use
 `{code, message, request_id}` without provider details; `X-Request-ID` is returned.
 Collections use `page` (default 1) and `limit` (default 50, maximum 100).
 
 | Method | Route | Purpose |
 |---|---|---|
-| GET, POST | /api/v1/sites | List or register a monitored URL |
-| GET, PATCH, DELETE | /api/v1/sites/{id} | Retrieve, configure interval, or delete |
+| GET, POST | /api/v1/sites | Paginated list or register a named monitored URL |
+| GET, PATCH, DELETE | /api/v1/sites/{id} | Retrieve, edit name/URL/interval/enrollment/monitoring state, or delete |
 | POST | /api/v1/sites/{site_id}/subscriptions | Subscribe an opaque development identity |
 | GET | /api/v1/subscriptions | List subscriptions for `subscriber_identity` |
 | GET, DELETE | /api/v1/subscriptions/{id} | Retrieve or delete, scoped to `subscriber_identity` |
@@ -28,10 +29,26 @@ and path semantics. The normalized URL has a unique database constraint. Change 
 stable and suitable for a future public URL, but this phase does not publish public change
 pages or retain page snapshots.
 
+Site responses include `name`, `monitoring_enabled`, `active_subscriber_count`, and
+`last_detected_change_at`. `POST /api/v1/sites` requires a 1–200 character name and URL;
+equivalent normalized URLs retain the existing idempotent behavior and return the registered
+site with 200. `PATCH /api/v1/sites/{id}` accepts optional `name`, `url`, `interval_seconds`,
+`public_subscriptions_enabled`, and `monitoring_enabled`; a URL collision returns 409. URL
+changes keep the site UUID, subscribers, and history, clear validators/current hash and
+current check timestamps, and make the site due for a silent baseline. Monitoring is
+enabled by default and disabling it prevents new scheduler claims. `DELETE` cascades the
+site's subscriptions, tokens, pending notifications, and change history, and removes
+related pending verification email work.
+
 For Phase 4, the development subscription API accepts valid email addresses and creates
 pending subscriptions through the same verification service as the browser flow. It never
 activates an address directly. Site responses include the permanent `subscription_url` and
 `public_subscriptions_enabled` setting (default `false`); PATCH changes the setting.
+The authenticated server-rendered Management UI exposes the same setting on website
+registration and editing forms. Its checkbox is unchecked by default. Public subscription
+availability is independent of `monitoring_enabled`; disabling enrollment rejects new
+registrations while preserving existing subscribers, the permanent URL, and subscriber
+management and unsubscribe routes.
 
 ## Public subscription routes
 These server-rendered routes need no account. A public page accepts only an existing site
@@ -83,16 +100,29 @@ The unsubscribe route is public and requires no session, cookie, or CSRF token; 
 standard form-encoded RFC 8058 one-click POSTs. Unknown and already-used tokens receive a
 generic completion response.
 
-## Later owner interface
-An OIDC owner UI and tenant APIs are future work. Phase 4 adds no public slug selection,
-watch selection, arbitrary site registration, or OIDC session.
+## Administrative route protection
+In the local authenticated environment, OAuth2 Proxy protects `/management`, all `/api/v1/*`
+routes, `/api/openapi.json`, and `/swagger-ui/*`. Unauthenticated browser requests to the
+management UI redirect to Keycloak; API paths return 401. Access requires membership in
+the Keycloak `pagerune-management` group. The backend is not published as a host port in
+Compose. `/management` provides the authenticated website list and create/edit/remove
+workflows.
+
+The following routes remain public at the proxy because they use their existing public or
+email-token authorization: `/`, `/subscribe/{site_id}`, `/verify/{token}`, subscriber
+`/manage` routes, `/unsubscribe/{token}`, and `/static/*`. Subscriber `/manage` is unrelated
+to administrative management. Health/readiness are internal-only.
+
+The local group gate is not tenant-level authorization. The current business API remains a
+development API; future tenant APIs must enforce membership and tenant scope in the
+application. The website management UI operates on the existing global site collection;
+tenant membership and per-resource authorization remain future work.
 
 ## Identity
-Admin JSON endpoints validate OAuth2 access tokens (issuer, signature, audience, expiry,
-allowed algorithm and scopes). Do not use ID tokens as API bearer tokens. Resolve
-issuer+subject to explicit tenant membership on every tenant-bound operation.
-Swagger authorization uses Authorization Code with PKCE and a public IdP client; never
-embed a client secret. Browser UI may use a confidential server-side OIDC client.
+The local proxy validates the OIDC session and group before forwarding management routes.
+This phase does not add OIDC token validation to Rust. Future admin JSON endpoints must
+validate OAuth2 access tokens and resolve issuer+subject to explicit tenant membership on
+every tenant-bound operation.
 
 ## API evolution
 Before implementation choose the concrete IdP roles/scopes mapping and token-link

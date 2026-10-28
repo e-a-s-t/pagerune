@@ -14,6 +14,7 @@ use uuid::Uuid;
 #[derive(Serialize, ToSchema, FromRow)]
 pub struct Site {
     pub id: Uuid,
+    pub name: String,
     pub original_url: String,
     pub normalized_url: String,
     pub interval_seconds: i32,
@@ -25,6 +26,9 @@ pub struct Site {
     pub next_check_at: chrono::DateTime<chrono::Utc>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub public_subscriptions_enabled: bool,
+    pub monitoring_enabled: bool,
+    pub active_subscriber_count: i64,
+    pub last_detected_change_at: Option<chrono::DateTime<chrono::Utc>>,
     #[sqlx(skip)]
     pub subscription_url: String,
 }
@@ -56,6 +60,7 @@ pub struct Page<T> {
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateSite {
+    pub name: String,
     pub url: String,
     #[serde(default = "default_interval")]
     pub interval_seconds: i32,
@@ -65,8 +70,11 @@ pub struct CreateSite {
 
 #[derive(Deserialize, ToSchema)]
 pub struct UpdateSite {
+    pub name: Option<String>,
+    pub url: Option<String>,
     pub interval_seconds: Option<i32>,
     pub public_subscriptions_enabled: Option<bool>,
+    pub monitoring_enabled: Option<bool>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -94,7 +102,7 @@ pub struct ApiErrorBody {
     pub request_id: String,
 }
 
-pub struct ApiError(StatusCode, &'static str, &'static str);
+pub struct ApiError(pub StatusCode, pub &'static str, pub &'static str);
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
@@ -144,6 +152,17 @@ fn validate_interval(interval: i32) -> Result<(), ApiError> {
     }
     Ok(())
 }
+fn validate_name(name: &str) -> Result<(), ApiError> {
+    if name.trim().is_empty() || name.trim().chars().count() > 200 {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "invalid_name",
+            "Name must contain 1 to 200 characters",
+        ));
+    }
+    Ok(())
+}
+const SITE_COLUMNS: &str = "id, name, original_url, normalized_url, interval_seconds, current_content_hash, last_checked_at, last_successful_check_at, current_status, last_error, next_check_at, created_at, public_subscriptions_enabled, monitoring_enabled, (SELECT count(*) FROM subscriptions sub WHERE sub.site_id=monitored_sites.id AND sub.status='active') AS active_subscriber_count, (SELECT max(detected_at) FROM site_changes ch WHERE ch.site_id=monitored_sites.id) AS last_detected_change_at";
 fn validate_identity(identity: &str) -> Result<(), ApiError> {
     if identity.trim().is_empty() || identity.len() > 256 {
         return Err(ApiError(
@@ -168,6 +187,7 @@ pub async fn create_site(
     State(state): State<AppState>,
     Json(input): Json<CreateSite>,
 ) -> Result<(StatusCode, Json<Site>), ApiError> {
+    validate_name(&input.name)?;
     validate_interval(input.interval_seconds)?;
     let normalized = normalize_url(&input.url).map_err(|_| {
         ApiError(
@@ -178,10 +198,9 @@ pub async fn create_site(
     })?;
     let id = Uuid::new_v4();
     let mut tx = state.database.begin().await.map_err(|_| db_error())?;
-    let inserted = sqlx::query_as::<_, Site>(
-        "INSERT INTO monitored_sites (id, original_url, normalized_url, interval_seconds, public_subscriptions_enabled) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (normalized_url) DO NOTHING RETURNING id, original_url, normalized_url, interval_seconds, current_content_hash, last_checked_at, last_successful_check_at, current_status, last_error, next_check_at, created_at, public_subscriptions_enabled",
-    )
+    let inserted = sqlx::query_as::<_, Site>(&format!("INSERT INTO monitored_sites (id, name, original_url, normalized_url, interval_seconds, public_subscriptions_enabled) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (normalized_url) DO NOTHING RETURNING {SITE_COLUMNS}"))
     .bind(id)
+    .bind(input.name.trim())
     .bind(input.url)
     .bind(&normalized)
     .bind(input.interval_seconds)
@@ -192,9 +211,9 @@ pub async fn create_site(
     let (status, mut site) = if let Some(site) = inserted {
         (StatusCode::CREATED, site)
     } else {
-        let site = sqlx::query_as::<_, Site>(
-            "SELECT id, original_url, normalized_url, interval_seconds, current_content_hash, last_checked_at, last_successful_check_at, current_status, last_error, next_check_at, created_at, public_subscriptions_enabled FROM monitored_sites WHERE normalized_url=$1",
-        )
+        let site = sqlx::query_as::<_, Site>(&format!(
+            "SELECT {SITE_COLUMNS} FROM monitored_sites WHERE normalized_url=$1"
+        ))
         .bind(normalized)
         .fetch_optional(&mut *tx)
         .await
@@ -213,8 +232,14 @@ pub async fn list_sites(
     Query(query): Query<Pagination>,
 ) -> Result<Json<Page<Site>>, ApiError> {
     let (page, limit, offset) = pagination(&query)?;
-    let mut items = sqlx::query_as::<_, Site>("SELECT id, original_url, normalized_url, interval_seconds, current_content_hash, last_checked_at, last_successful_check_at, current_status, last_error, next_check_at, created_at, public_subscriptions_enabled FROM monitored_sites ORDER BY created_at DESC, id LIMIT $1 OFFSET $2")
-        .bind(limit).bind(offset).fetch_all(&state.database).await.map_err(|_| db_error())?;
+    let mut items = sqlx::query_as::<_, Site>(&format!(
+        "SELECT {SITE_COLUMNS} FROM monitored_sites ORDER BY created_at DESC, id LIMIT $1 OFFSET $2"
+    ))
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.database)
+    .await
+    .map_err(|_| db_error())?;
     for site in &mut items {
         set_subscription_url(site, &state.public_base_url);
     }
@@ -226,19 +251,34 @@ pub async fn get_site(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Site>, ApiError> {
-    let mut site = sqlx::query_as::<_, Site>("SELECT id, original_url, normalized_url, interval_seconds, current_content_hash, last_checked_at, last_successful_check_at, current_status, last_error, next_check_at, created_at, public_subscriptions_enabled FROM monitored_sites WHERE id=$1")
-        .bind(id).fetch_optional(&state.database).await.map_err(|_| db_error())?.ok_or(ApiError(StatusCode::NOT_FOUND, "not_found", "Site not found"))?;
+    let mut site = sqlx::query_as::<_, Site>(&format!(
+        "SELECT {SITE_COLUMNS} FROM monitored_sites WHERE id=$1"
+    ))
+    .bind(id)
+    .fetch_optional(&state.database)
+    .await
+    .map_err(|_| db_error())?
+    .ok_or(ApiError(
+        StatusCode::NOT_FOUND,
+        "not_found",
+        "Site not found",
+    ))?;
     set_subscription_url(&mut site, &state.public_base_url);
     Ok(Json(site))
 }
 
-#[utoipa::path(patch, path = "/api/v1/sites/{id}", tag = "Sites", request_body = UpdateSite, params(("id" = Uuid, Path)), responses((status = 200, body = Site), (status = 400, body = ApiErrorBody), (status = 404, body = ApiErrorBody), (status = 503, body = ApiErrorBody)))]
+#[utoipa::path(patch, path = "/api/v1/sites/{id}", tag = "Sites", request_body = UpdateSite, params(("id" = Uuid, Path)), responses((status = 200, body = Site), (status = 400, body = ApiErrorBody), (status = 404, body = ApiErrorBody), (status = 409, description = "URL already registered", body = ApiErrorBody), (status = 503, body = ApiErrorBody)))]
 pub async fn update_site(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(input): Json<UpdateSite>,
 ) -> Result<Json<Site>, ApiError> {
-    if input.interval_seconds.is_none() && input.public_subscriptions_enabled.is_none() {
+    if input.name.is_none()
+        && input.url.is_none()
+        && input.interval_seconds.is_none()
+        && input.public_subscriptions_enabled.is_none()
+        && input.monitoring_enabled.is_none()
+    {
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
             "empty_update",
@@ -248,8 +288,80 @@ pub async fn update_site(
     if let Some(interval) = input.interval_seconds {
         validate_interval(interval)?;
     }
-    let mut site = sqlx::query_as::<_, Site>("UPDATE monitored_sites SET interval_seconds=COALESCE($2,interval_seconds), public_subscriptions_enabled=COALESCE($3,public_subscriptions_enabled), next_check_at=CASE WHEN $2 IS NULL THEN next_check_at ELSE LEAST(next_check_at,now()) END, updated_at=now() WHERE id=$1 RETURNING id, original_url, normalized_url, interval_seconds, current_content_hash, last_checked_at, last_successful_check_at, current_status, last_error, next_check_at, created_at, public_subscriptions_enabled")
-        .bind(id).bind(input.interval_seconds).bind(input.public_subscriptions_enabled).fetch_optional(&state.database).await.map_err(|_| db_error())?.ok_or(ApiError(StatusCode::NOT_FOUND, "not_found", "Site not found"))?;
+    if let Some(name) = &input.name {
+        validate_name(name)?;
+    }
+    let normalized = input
+        .url
+        .as_deref()
+        .map(normalize_url)
+        .transpose()
+        .map_err(|_| {
+            ApiError(
+                StatusCode::BAD_REQUEST,
+                "invalid_url",
+                "URL must be an HTTP or HTTPS URL without credentials",
+            )
+        })?;
+    let mut tx = state.database.begin().await.map_err(|_| db_error())?;
+    let current = sqlx::query_as::<_, (String, String)>(
+        "SELECT original_url, normalized_url FROM monitored_sites WHERE id=$1 FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| db_error())?
+    .ok_or(ApiError(
+        StatusCode::NOT_FOUND,
+        "not_found",
+        "Site not found",
+    ))?;
+    let url_changed = normalized.as_ref().is_some_and(|url| url != &current.1);
+    if url_changed {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM monitored_sites WHERE normalized_url=$1 AND id<>$2)",
+        )
+        .bind(normalized.as_ref().unwrap())
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|_| db_error())?;
+        if exists {
+            return Err(ApiError(
+                StatusCode::CONFLICT,
+                "duplicate_url",
+                "That URL is already registered",
+            ));
+        }
+    }
+    let query = format!(
+        "UPDATE monitored_sites SET name=COALESCE($2,name), original_url=CASE WHEN $3::text IS NULL THEN original_url ELSE $3 END, normalized_url=COALESCE($4,normalized_url), interval_seconds=COALESCE($5,interval_seconds), public_subscriptions_enabled=COALESCE($6,public_subscriptions_enabled), monitoring_enabled=COALESCE($7,monitoring_enabled), current_content_hash=CASE WHEN $8 THEN NULL ELSE current_content_hash END, etag=CASE WHEN $8 THEN NULL ELSE etag END, last_modified=CASE WHEN $8 THEN NULL ELSE last_modified END, last_checked_at=CASE WHEN $8 THEN NULL ELSE last_checked_at END, last_successful_check_at=CASE WHEN $8 THEN NULL ELSE last_successful_check_at END, current_status=CASE WHEN $8 THEN 'pending' ELSE current_status END, last_error=CASE WHEN $8 THEN NULL ELSE last_error END, next_check_at=CASE WHEN $7=false THEN next_check_at WHEN $8 OR $5 IS NOT NULL OR $7=true THEN now() ELSE next_check_at END, lease_owner=CASE WHEN $7=false OR $8 THEN NULL ELSE lease_owner END, lease_expires_at=CASE WHEN $7=false OR $8 THEN NULL ELSE lease_expires_at END, updated_at=now() WHERE id=$1 RETURNING {SITE_COLUMNS}"
+    );
+    let mut site = sqlx::query_as::<_, Site>(&query)
+        .bind(id)
+        .bind(input.name.as_deref().map(str::trim))
+        .bind(input.url.as_deref())
+        .bind(normalized.as_deref())
+        .bind(input.interval_seconds)
+        .bind(input.public_subscriptions_enabled)
+        .bind(input.monitoring_enabled)
+        .bind(url_changed)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|error| {
+            if let sqlx::Error::Database(db) = &error
+                && db.code().as_deref() == Some("23505")
+            {
+                ApiError(
+                    StatusCode::CONFLICT,
+                    "duplicate_url",
+                    "That URL is already registered",
+                )
+            } else {
+                db_error()
+            }
+        })?;
+    tx.commit().await.map_err(|_| db_error())?;
     set_subscription_url(&mut site, &state.public_base_url);
     Ok(Json(site))
 }
@@ -259,9 +371,42 @@ pub async fn delete_site(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    let mut tx = state.database.begin().await.map_err(|_| db_error())?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM monitored_sites WHERE id=$1)")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|_| db_error())?;
+    if !exists {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "Site not found",
+        ));
+    }
+    sqlx::query("SELECT id FROM monitored_sites WHERE id=$1 FOR UPDATE")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| db_error())?;
+    let subscriptions =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM subscriptions WHERE site_id=$1 ORDER BY id")
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|_| db_error())?;
+    for subscription_id in &subscriptions {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 7349871))")
+            .bind(subscription_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| db_error())?;
+    }
+    sqlx::query("DELETE FROM email_action_outbox WHERE action='verify' AND token_id IN (SELECT vt.token_id FROM verification_tokens vt JOIN subscriptions s ON s.id=vt.subscription_id WHERE s.site_id=$1)").bind(id).execute(&mut *tx).await.map_err(|_| db_error())?;
     let result = sqlx::query("DELETE FROM monitored_sites WHERE id=$1")
         .bind(id)
-        .execute(&state.database)
+        .execute(&mut *tx)
         .await
         .map_err(|_| db_error())?;
     if result.rows_affected() == 0 {
@@ -271,6 +416,7 @@ pub async fn delete_site(
             "Site not found",
         ));
     }
+    tx.commit().await.map_err(|_| db_error())?;
     Ok(StatusCode::NO_CONTENT)
 }
 

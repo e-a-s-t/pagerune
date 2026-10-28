@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Management — PageRune</title>
+    <link rel="stylesheet" href="/static/pagerune.css">
+  </head>
+  <body>
+    <header class="site-header"><a class="brand" href="/">PageRune</a><a class="button button-small button-quiet" href="/oauth2/sign_out?rd=%2F">Log out</a></header>
+    <main class="shell management-shell">
+      <div class="management-heading"><div><p class="eyebrow">Management</p><h1>Websites</h1><p class="lede">Manage the websites PageRune checks and their subscriptions.</p></div></div>
+      {% if notice %}<p class="notice" role="status">{{ notice }}</p>{% endif %}
+      {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+      <section class="management-panel" aria-labelledby="websites-heading">
+        <div class="panel-heading"><h2 id="websites-heading">Registered websites <span class="count">{{ total }}</span></h2></div>
+        {% if sites %}
+        <div class="table-wrap"><table class="site-table"><thead><tr><th scope="col">Website</th><th scope="col">Subscription</th><th scope="col">Monitoring</th><th scope="col">Last check</th><th scope="col">Last change</th><th scope="col">Subscribers</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead><tbody>
+          {% for site in sites %}<tr>
+            <td class="website-cell"><strong>{{ site.name }}</strong><a href="{{ site.original_url }}" rel="noreferrer">{{ site.original_url }}</a><small>{{ site.interval_text }}</small></td>
+            <td class="subscription-cell"><span class="status-pill {{ 'status-off' if not site.public_subscriptions_enabled else '' }}">Subscriptions {{ 'Enabled' if site.public_subscriptions_enabled else 'Disabled' }}</span><a class="subscription-url" href="{{ site.subscription_url }}" target="_blank" rel="noopener noreferrer">{{ site.subscription_url }}</a><div class="subscription-actions"><a href="{{ site.subscription_url }}" target="_blank" rel="noopener noreferrer">View</a><button class="copy-link" type="button" data-copy-url="{{ site.subscription_url }}">Copy link</button></div><span class="copy-feedback" aria-live="polite"></span></td>
+            <td><span class="status-pill {{ 'status-off' if not site.monitoring_enabled else 'status-' ~ site.current_status }}">{% if not site.monitoring_enabled %}Paused{% else %}{{ site.current_status | title }}{% endif %}</span>{% if site.last_error %}<small class="error-detail">{{ site.last_error }}</small>{% endif %}</td>
+            <td>{% if site.last_checked_at %}<time datetime="{{ site.last_checked_at }}">{{ site.last_checked_at }}</time>{% else %}<span class="muted">Not checked yet</span>{% endif %}</td>
+            <td>{% if site.last_detected_change_at %}<time datetime="{{ site.last_detected_change_at }}">{{ site.last_detected_change_at }}</time>{% else %}<span class="muted">No changes yet</span>{% endif %}</td>
+            <td>{{ site.active_subscriber_count }}</td>
+            <td><div class="row-actions"><a href="/management/{{ site.id }}/edit">Edit</a><a class="danger-link" href="/management/{{ site.id }}/delete">Remove</a></div></td>
+          </tr>{% endfor %}
+        </tbody></table></div>
+        {% else %}<div class="empty-state"><h3>No websites yet</h3><p>Register a website to start monitoring it. The first successful check creates a baseline without sending notifications.</p></div>{% endif %}
+        {% if pages > 1 %}<nav class="pagination" aria-label="Website pages">{% if page > 1 %}<a href="/management?page={{ page - 1 }}">Previous</a>{% endif %}<span>Page {{ page }} of {{ pages }}</span>{% if page < pages %}<a href="/management?page={{ page + 1 }}">Next</a>{% endif %}</nav>{% endif %}
+      </section>
+      <section class="management-panel add-panel" aria-labelledby="add-heading">
+        <h2 id="add-heading">Register a website</h2><p class="muted">New websites use the 24-hour monitoring default. Public subscriptions remain disabled until enabled separately.</p>
+        <form method="post" action="/management" class="management-form">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <div class="form-grid"><div><label for="name">Website name</label><input id="name" name="name" type="text" maxlength="200" required value="{{ form_name }}" autocomplete="organization"></div>
+          <div><label for="url">Website URL</label><input id="url" name="url" type="url" required inputmode="url" placeholder="https://example.com" value="{{ form_url }}" autocomplete="url"></div></div>
+          <label class="checkbox-label"><input type="checkbox" name="public_subscriptions_enabled" value="true" {% if form_public_subscriptions_enabled %}checked{% endif %}> Allow public subscriptions</label>
+          <button class="button" type="submit">Register website</button>
+        </form>
+      </section>
+    </main>
+    <footer class="footer">Website updates, delivered with care.</footer>
+    <script>
+      document.querySelectorAll('.copy-link').forEach((button) => {
+        button.addEventListener('click', async () => {
+          const feedback = button.parentElement.nextElementSibling;
+          try {
+            await navigator.clipboard.writeText(button.dataset.copyUrl);
+            feedback.textContent = 'Link copied';
+          } catch (_) {
+            feedback.textContent = 'Could not copy link';
+          }
+        });
+      });
+    </script>
+  </body>
+</html>

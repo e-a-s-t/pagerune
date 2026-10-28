@@ -20,8 +20,9 @@ Enable enrollment per site only after registration, by setting
 `public_subscriptions_enabled=true` through private owner API access. Keep the development
 API disabled on public ingress. Configure Turnstile site/secret keys and a shared 64-hex
 `PAGERUNE_TOKEN_KEY` in the deployment secret; every replica must use the same key. Never
-enable `PAGERUNE_TURNSTILE_TEST_MODE` outside a loopback development instance. Verification
-and management outbox jobs use PostgreSQL leases and token hashes. Monitor their pending,
+enable `PAGERUNE_TURNSTILE_TEST_MODE` outside a loopback development instance or the local
+Compose trusted-proxy profile. Verification and management outbox jobs use PostgreSQL
+leases and token hashes. Monitor their pending,
 delivered and failed counts without logging recipient addresses or token URLs. A shared
 cleanup task removes expired tokens, sessions, form nonces and rate buckets.
 

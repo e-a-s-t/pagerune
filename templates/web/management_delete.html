@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Remove website — PageRune</title><link rel="stylesheet" href="/static/pagerune.css"></head>
+  <body>
+    <header class="site-header"><a class="brand" href="/management">PageRune management</a><a class="button button-small button-quiet" href="/oauth2/sign_out?rd=%2F">Log out</a></header>
+    <main class="shell"><section class="management-panel form-panel">
+      <a class="back-link" href="/management">← All websites</a><p class="eyebrow">Confirmation</p><h1>Remove this website?</h1>
+      <p><strong>{{ name }}</strong><br><span class="muted">{{ url }}</span></p>
+      <p class="alert">Removing this website permanently deletes its subscriptions, verification and unsubscribe tokens, monitoring history, and pending notifications.</p>
+      <form method="post" action="/management/{{ id }}/delete" class="button-row"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="button button-danger" type="submit">Remove website</button><a class="button button-quiet" href="/management">Cancel</a></form>
+    </section></main>
+    <footer class="footer">Website updates, delivered with care.</footer>
+  </body>
+</html>
