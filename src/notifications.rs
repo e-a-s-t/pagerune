@@ -569,7 +569,7 @@ mod tests {
             let change = Uuid::new_v4();
             sqlx::query("INSERT INTO site_changes(id,site_id,previous_content_hash,new_content_hash) VALUES($1,$2,$3,$4)").bind(change).bind(site).bind("a".repeat(64)).bind("b".repeat(64)).execute(&pool).await.unwrap();
             let notification = Uuid::new_v4();
-            sqlx::query("INSERT INTO notification_outbox(id,change_id,subscription_id,recipient) VALUES($1,$2,$3,'test@example.test')").bind(notification).bind(change).bind(sub).execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO notification_outbox(id,change_id,subscription_id,recipient,next_attempt_at) VALUES($1,$2,$3,'test@example.test',now()+interval '1 hour')").bind(notification).bind(change).bind(sub).execute(&pool).await.unwrap();
             let duplicate=sqlx::query("INSERT INTO notification_outbox(id,change_id,subscription_id,recipient) VALUES($1,$2,$3,'test@example.test') ON CONFLICT(change_id,subscription_id) DO NOTHING").bind(Uuid::new_v4()).bind(change).bind(sub).execute(&pool).await.unwrap();
             assert_eq!(
                 duplicate.rows_affected(),
@@ -578,6 +578,11 @@ mod tests {
             );
             ids.push(notification);
         }
+        sqlx::query("UPDATE notification_outbox SET next_attempt_at=now() WHERE id=ANY($1)")
+            .bind(&ids)
+            .execute(&pool)
+            .await
+            .unwrap();
         let a = claim_for_site(&pool, Some(site)).await.unwrap().unwrap();
         let b = claim_for_site(&pool, Some(site)).await.unwrap().unwrap();
         assert_ne!(

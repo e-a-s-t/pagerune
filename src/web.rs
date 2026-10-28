@@ -187,6 +187,7 @@ pub fn router() -> Router<AppState> {
             axum::routing::post(management_unsubscribe),
         )
         .route("/static/pagerune.css", get(stylesheet))
+        .route("/static/management.js", get(management_script))
         .layer(DefaultBodyLimit::max(16 * 1024))
 }
 
@@ -261,7 +262,7 @@ fn render(template: &str, values: minijinja::Value) -> Response {
 
 fn page(template: &str, values: minijinja::Value) -> Response {
     let mut response = render(template, values);
-    response.headers_mut().insert("content-security-policy", HeaderValue::from_static("default-src 'self'; style-src 'self'; script-src https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; form-action 'self'; base-uri 'none'; object-src 'none'"));
+    response.headers_mut().insert("content-security-policy", HeaderValue::from_static("default-src 'self'; style-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; form-action 'self'; base-uri 'none'; object-src 'none'"));
     response.headers_mut().insert(
         "x-content-type-options",
         HeaderValue::from_static("nosniff"),
@@ -327,13 +328,19 @@ async fn management_page(
         "last_error": site.last_error, "interval_seconds": site.interval_seconds,
         "interval_text": format_interval(site.interval_seconds),
         "last_checked_at": site.last_checked_at.map(|date| date.to_rfc3339()),
+        "last_checked_at_display": site.last_checked_at.map(format_management_timestamp),
         "last_detected_change_at": site.last_detected_change_at.map(|date| date.to_rfc3339()),
+        "last_detected_change_at_display": site.last_detected_change_at.map(format_management_timestamp),
     })).collect();
     let pages = ((total + limit - 1) / limit).max(1);
     admin_page(
         "management.html",
         context! { sites => sites, csrf => csrf, notice => notice, error => error, form_name => form_name, form_url => form_url, form_public_subscriptions_enabled => form_public_subscriptions_enabled, page => page_number, pages => pages, total => total },
     )
+}
+
+fn format_management_timestamp(date: chrono::DateTime<chrono::Utc>) -> String {
+    date.format("%-d %b %Y, %H:%M UTC").to_string()
 }
 
 fn subscription_url(public_base_url: &str, site_id: Uuid) -> String {
@@ -1103,6 +1110,14 @@ async fn stylesheet() -> Response {
         .into_response()
 }
 
+async fn management_script() -> Response {
+    (
+        [("content-type", "text/javascript; charset=utf-8")],
+        include_str!("../static/js/management.js"),
+    )
+        .into_response()
+}
+
 pub async fn run_action_mailer(
     pool: PgPool,
     smtp: SmtpConfig,
@@ -1394,17 +1409,21 @@ mod tests {
             "{html}"
         );
         assert!(!html.contains("<script>alert(1)</script>"), "{html}");
-        assert!(html.contains("Subscriptions Disabled"), "{html}");
+        assert!(
+            html.contains("data-label=\"Subscriptions\"><span class=\"status-pill status-off\">Disabled</span>"),
+            "{html}"
+        );
         assert!(
             html.contains(
-                "https:&#x2f;&#x2f;public.example&#x2f;subscribe&#x2f;f56f3e71-4f64-4f10-a246-084d38c3816f?x=1&amp;y=2"
+                "aria-label=\"Website details for &lt;script&gt;alert(1)&lt;&#x2f;script&gt;\""
             ),
             "{html}"
         );
-        assert!(
-            html.contains("target=\"_blank\" rel=\"noopener noreferrer\">View</a>"),
-            "{html}"
-        );
+        assert!(html.contains("Permanent subscription URL"), "{html}");
+        assert!(html.contains("View subscription page"), "{html}");
+        assert!(html.contains("Copy subscription link"), "{html}");
+        assert!(html.contains("Edit website"), "{html}");
+        assert!(html.contains("Remove website"), "{html}");
         assert!(html.contains("data-copy-url=\"https:&#x2f;&#x2f;public.example&#x2f;subscribe&#x2f;f56f3e71-4f64-4f10-a246-084d38c3816f?x=1&amp;y=2\""), "{html}");
         assert!(html.contains("Register a website"));
     }

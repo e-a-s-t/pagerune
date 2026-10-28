@@ -15,16 +15,34 @@
       <section class="management-panel" aria-labelledby="websites-heading">
         <div class="panel-heading"><h2 id="websites-heading">Registered websites <span class="count">{{ total }}</span></h2></div>
         {% if sites %}
-        <div class="table-wrap"><table class="site-table"><thead><tr><th scope="col">Website</th><th scope="col">Subscription</th><th scope="col">Monitoring</th><th scope="col">Last check</th><th scope="col">Last change</th><th scope="col">Subscribers</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead><tbody>
-          {% for site in sites %}<tr>
-            <td class="website-cell"><strong>{{ site.name }}</strong><a href="{{ site.original_url }}" rel="noreferrer">{{ site.original_url }}</a><small>{{ site.interval_text }}</small></td>
-            <td class="subscription-cell"><span class="status-pill {{ 'status-off' if not site.public_subscriptions_enabled else '' }}">Subscriptions {{ 'Enabled' if site.public_subscriptions_enabled else 'Disabled' }}</span><a class="subscription-url" href="{{ site.subscription_url }}" target="_blank" rel="noopener noreferrer">{{ site.subscription_url }}</a><div class="subscription-actions"><a href="{{ site.subscription_url }}" target="_blank" rel="noopener noreferrer">View</a><button class="copy-link" type="button" data-copy-url="{{ site.subscription_url }}">Copy link</button></div><span class="copy-feedback" aria-live="polite"></span></td>
-            <td><span class="status-pill {{ 'status-off' if not site.monitoring_enabled else 'status-' ~ site.current_status }}">{% if not site.monitoring_enabled %}Paused{% else %}{{ site.current_status | title }}{% endif %}</span>{% if site.last_error %}<small class="error-detail">{{ site.last_error }}</small>{% endif %}</td>
-            <td>{% if site.last_checked_at %}<time datetime="{{ site.last_checked_at }}">{{ site.last_checked_at }}</time>{% else %}<span class="muted">Not checked yet</span>{% endif %}</td>
-            <td>{% if site.last_detected_change_at %}<time datetime="{{ site.last_detected_change_at }}">{{ site.last_detected_change_at }}</time>{% else %}<span class="muted">No changes yet</span>{% endif %}</td>
-            <td>{{ site.active_subscriber_count }}</td>
-            <td><div class="row-actions"><a href="/management/{{ site.id }}/edit">Edit</a><a class="danger-link" href="/management/{{ site.id }}/delete">Remove</a></div></td>
-          </tr>{% endfor %}
+        <div class="table-wrap"><table class="site-table"><thead><tr><th scope="col">Website</th><th scope="col">Monitoring</th><th scope="col">Subscriptions</th><th scope="col">Details</th></tr></thead><tbody>
+          {% for site in sites %}
+          <tr class="site-row">
+            <td class="website-cell" data-label="Website"><span class="site-name-compact" title="{{ site.name }}">{{ site.name }}</span></td>
+            <td data-label="Monitoring"><span class="status-pill {{ 'status-off' if not site.monitoring_enabled else 'status-' ~ site.current_status }}">{% if not site.monitoring_enabled %}Paused{% else %}{{ site.current_status | title }}{% endif %}</span></td>
+            <td data-label="Subscriptions"><span class="status-pill {{ 'status-off' if not site.public_subscriptions_enabled else '' }}">{{ 'Enabled' if site.public_subscriptions_enabled else 'Disabled' }}</span></td>
+            <td class="details-toggle-cell" data-label="Details"><button class="details-toggle" type="button" aria-expanded="false" aria-controls="site-details-{{ site.id }}" data-details-id="site-details-{{ site.id }}">Details</button></td>
+          </tr>
+          <tr class="details-row" hidden><td colspan="4"><section id="site-details-{{ site.id }}" class="details-panel" aria-label="Website details for {{ site.name }}">
+            <h3>{{ site.name }}</h3>
+            <dl class="details-grid">
+              <dt>Monitored URL</dt><dd class="wrap-link"><a href="{{ site.original_url }}" target="_blank" rel="noopener noreferrer">{{ site.original_url }}</a></dd>
+              <dt>Permanent subscription URL</dt><dd class="wrap-link"><a href="{{ site.subscription_url }}" target="_blank" rel="noopener noreferrer">{{ site.subscription_url }}</a></dd>
+              <dt>Monitoring interval</dt><dd>{{ site.interval_text }}</dd>
+              <dt>Last check</dt><dd>{% if site.last_checked_at %}<time datetime="{{ site.last_checked_at }}" title="{{ site.last_checked_at }}">{{ site.last_checked_at_display }}</time>{% else %}<span class="muted">Not checked yet</span>{% endif %}</dd>
+              <dt>Last detected change</dt><dd>{% if site.last_detected_change_at %}<time datetime="{{ site.last_detected_change_at }}" title="{{ site.last_detected_change_at }}">{{ site.last_detected_change_at_display }}</time>{% else %}<span class="muted">No changes yet</span>{% endif %}</dd>
+              <dt>Active subscribers</dt><dd>{{ site.active_subscriber_count }}</dd>
+              {% if site.last_error %}<dt>Latest error</dt><dd class="error-detail">{{ site.last_error }}</dd>{% endif %}
+            </dl>
+            <div class="details-actions">
+              <a class="button button-small" href="{{ site.subscription_url }}" target="_blank" rel="noopener noreferrer">View subscription page</a>
+              <button class="copy-link" type="button" data-copy-url="{{ site.subscription_url }}">Copy subscription link</button>
+              <a href="/management/{{ site.id }}/edit">Edit website</a>
+              <a class="danger-link" href="/management/{{ site.id }}/delete">Remove website</a>
+            </div>
+            <span class="copy-feedback" role="status" aria-live="polite"></span>
+          </section></td></tr>
+          {% endfor %}
         </tbody></table></div>
         {% else %}<div class="empty-state"><h3>No websites yet</h3><p>Register a website to start monitoring it. The first successful check creates a baseline without sending notifications.</p></div>{% endif %}
         {% if pages > 1 %}<nav class="pagination" aria-label="Website pages">{% if page > 1 %}<a href="/management?page={{ page - 1 }}">Previous</a>{% endif %}<span>Page {{ page }} of {{ pages }}</span>{% if page < pages %}<a href="/management?page={{ page + 1 }}">Next</a>{% endif %}</nav>{% endif %}
@@ -41,18 +59,6 @@
       </section>
     </main>
     <footer class="footer">Website updates, delivered with care.</footer>
-    <script>
-      document.querySelectorAll('.copy-link').forEach((button) => {
-        button.addEventListener('click', async () => {
-          const feedback = button.parentElement.nextElementSibling;
-          try {
-            await navigator.clipboard.writeText(button.dataset.copyUrl);
-            feedback.textContent = 'Link copied';
-          } catch (_) {
-            feedback.textContent = 'Could not copy link';
-          }
-        });
-      });
-    </script>
+    <script src="/static/management.js" defer></script>
   </body>
 </html>

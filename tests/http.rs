@@ -639,6 +639,13 @@ async fn management_landing_is_separate_from_public_subscriber_management() {
     let pool = connected_database().await;
     let management_response = response("/management", pool.clone()).await;
     assert_eq!(management_response.status(), StatusCode::OK);
+    let csp = management_response
+        .headers()
+        .get("content-security-policy")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
     let body = axum::body::to_bytes(management_response.into_body(), usize::MAX)
         .await
         .unwrap();
@@ -646,6 +653,18 @@ async fn management_landing_is_separate_from_public_subscriber_management() {
     assert!(html.contains("Registered websites"));
     assert!(html.contains("Register a website"));
     assert!(html.contains("/oauth2/sign_out"));
+    assert!(csp.contains("script-src 'self' https://challenges.cloudflare.com"));
+
+    let script = response("/static/management.js", pool.clone()).await;
+    assert_eq!(script.status(), StatusCode::OK);
+    assert_eq!(
+        script.headers().get("content-type").unwrap(),
+        "text/javascript; charset=utf-8"
+    );
+    let script_body = axum::body::to_bytes(script.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(String::from_utf8_lossy(&script_body).contains("aria-expanded"));
 
     let subscriber_management = response("/manage", pool).await;
     assert_eq!(subscriber_management.status(), StatusCode::OK);
@@ -664,6 +683,7 @@ async fn disabled_subscription_link_does_not_accept_a_new_subscription() {
         .unwrap();
 
     let csrf = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let email = format!("{}@example.test", Uuid::new_v4().simple());
     let csrf_hash = hex::encode(Sha256::digest(csrf.as_bytes()));
     sqlx::query("INSERT INTO web_form_nonces(token_hash,purpose,site_id,expires_at) VALUES($1,'subscribe',$2,now()+interval '20 minutes')")
         .bind(csrf_hash)
@@ -672,7 +692,7 @@ async fn disabled_subscription_link_does_not_accept_a_new_subscription() {
         .await
         .unwrap();
     let body = form_body(&[
-        ("email", "new-subscriber@example.test"),
+        ("email", &email),
         ("csrf", &csrf),
         ("cf-turnstile-response", "dev-human-ok"),
     ]);
@@ -950,6 +970,16 @@ async fn management_ui_creates_edits_and_removes_site_with_csrf_and_cascades() {
     sqlx::query("INSERT INTO subscriptions(id,site_id,subscriber_identity,status) VALUES($1,$2,$3,'active')").bind(subscription_id).bind(site_id).bind(format!("{}@example.test", Uuid::new_v4().simple())).execute(&pool).await.unwrap();
     let change_id = Uuid::new_v4();
     sqlx::query("INSERT INTO site_changes(id,site_id,previous_content_hash,new_content_hash) VALUES($1,$2,$3,$4)").bind(change_id).bind(site_id).bind("a".repeat(64)).bind("b".repeat(64)).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE site_changes SET detected_at='2026-01-02 03:04:00+00' WHERE id=$1")
+        .bind(change_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE monitored_sites SET last_checked_at='2026-02-03 04:05:00+00' WHERE id=$1")
+        .bind(site_id)
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("INSERT INTO notification_outbox(id,change_id,subscription_id,recipient) VALUES($1,$2,$3,'person@example.test')").bind(Uuid::new_v4()).bind(change_id).bind(subscription_id).execute(&pool).await.unwrap();
     let verification_hash = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     sqlx::query("INSERT INTO verification_tokens(token_id,token_hash,subscription_id,expires_at) VALUES($1,$2,$3,now()+interval '1 hour')").bind(token_id).bind(verification_hash).bind(subscription_id).execute(&pool).await.unwrap();
@@ -964,14 +994,22 @@ async fn management_ui_creates_edits_and_removes_site_with_csrf_and_cascades() {
     .unwrap();
     assert!(listing_html.contains("Edited &lt;script&gt;alert(1)&lt;&#x2f;script&gt;"));
     assert!(!listing_html.contains("Edited <script>alert(1)</script>"));
-    assert!(listing_html.contains("<td>1</td>"));
+    assert!(listing_html.contains("Active subscribers"));
     assert!(listing_html.contains(">Paused</span>"));
-    assert!(listing_html.contains("Subscriptions Disabled"));
+    assert!(listing_html.contains(
+        "data-label=\"Subscriptions\"><span class=\"status-pill status-off\">Disabled</span>"
+    ));
     assert!(listing_html.contains(&format!(
         "http:&#x2f;&#x2f;localhost:8080&#x2f;subscribe&#x2f;{site_id}"
     )));
-    assert!(listing_html.contains("Copy link"));
-    assert!(listing_html.contains("target=\"_blank\" rel=\"noopener noreferrer\">View</a>"));
+    assert!(listing_html.contains("Copy subscription link"));
+    assert!(listing_html.contains("View subscription page"));
+    assert!(listing_html.contains("Edit website"));
+    assert!(listing_html.contains("Remove website"));
+    assert!(listing_html.contains("3 Feb 2026, 04:05 UTC"));
+    assert!(listing_html.contains("title=\"2026-02-03T04:05:00+00:00\""));
+    assert!(listing_html.contains("2 Jan 2026, 03:04 UTC"));
+    assert!(listing_html.contains("title=\"2026-01-02T03:04:00+00:00\""));
     let enable_page = response(&format!("/management/{site_id}/edit"), pool.clone()).await;
     let enable_html = String::from_utf8(
         axum::body::to_bytes(enable_page.into_body(), usize::MAX)
@@ -1016,7 +1054,10 @@ async fn management_ui_creates_edits_and_removes_site_with_csrf_and_cascades() {
             .to_vec(),
     )
     .unwrap();
-    assert!(enabled_html.contains("Subscriptions Enabled"));
+    assert!(
+        enabled_html
+            .contains("data-label=\"Subscriptions\"><span class=\"status-pill \">Enabled</span>")
+    );
     assert!(enabled_html.contains(&format!(
         "http:&#x2f;&#x2f;localhost:8080&#x2f;subscribe&#x2f;{site_id}"
     )));
