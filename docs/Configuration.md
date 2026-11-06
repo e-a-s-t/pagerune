@@ -17,6 +17,10 @@ executes SELECT 1. It does not validate migration or worker readiness. The fetch
 uses a 180-second lease and retries failed requests within five minutes. The database pool
 is capped at five connections per replica; size total connections against CNPG capacity.
 
+For the production container, set `PAGERUNE_BIND=0.0.0.0:8080`; the image deliberately
+does not override this environment-based setting. Supply all configuration and secrets at
+runtime rather than baking them into an image.
+
 ## Implemented SMTP and notification settings
 | Variable | Meaning | Default |
 |---|---|---|

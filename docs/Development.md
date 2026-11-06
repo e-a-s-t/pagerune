@@ -87,3 +87,38 @@ Compose authentication checks, start the stack and run `python3 tests/compose-au
 Edit `templates/email/change.html` and `templates/email/change.txt` while the app runs;
 the next notification uses those changes without recompilation. Mailpit captures SMTP
 locally, and no email is delivered externally.
+
+## Production-image workflow
+
+Build the same production image used by CI locally:
+
+```sh
+docker build -t pagerune:local .
+```
+
+The image has no built-in configuration or secrets. Supply the normal runtime environment,
+set `PAGERUNE_BIND=0.0.0.0:8080`, and point `DATABASE_URL` at a PostgreSQL host reachable
+from the container. For example, use an ignored local environment file only on a trusted
+development machine:
+
+```sh
+docker run --rm --name pagerune -p 8080:8080 \
+  --env-file .env \
+  -e PAGERUNE_BIND=0.0.0.0:8080 \
+  -e DATABASE_URL='postgres://…container-reachable-postgres…/pagerune' \
+  pagerune:local
+```
+
+Apply embedded SQLx migrations explicitly with the same image before starting an
+application replica:
+
+```sh
+docker run --rm --env-file .env \
+  -e DATABASE_URL='postgres://…container-reachable-postgres…/pagerune' \
+  pagerune:local migrate
+```
+
+The image also includes the `migrations/`, `templates/`, and `static/` trees. Web templates
+and static assets are compiled into the binary today; email templates remain available at
+`/app/templates/email` for the configurable runtime template directory. The Compose stack
+continues to build this Dockerfile and configures that path automatically.

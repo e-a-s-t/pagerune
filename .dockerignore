@@ -1,6 +1,34 @@
-.git
+# Version control and local configuration
+.git/
 .env
+.env.*
+!.env.example
 .envrc.local
-target
-.direnv
-__pycache__
+.direnv/
+
+# Build output and dependency caches
+target/
+coverage/
+*.profraw
+*.profdata
+
+# Development tooling and local orchestration
+.devbox/
+devbox.json
+devbox.lock
+compose.yaml
+deploy/
+tests/
+docs/
+.github/
+
+# Editor, operating-system, and temporary files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+__pycache__/
+*.py[cod]
+*.log

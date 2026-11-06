@@ -7,6 +7,10 @@ a local capture server. OIDC tests use controlled discovery/JWKS and invalid-tok
 | ID | Scenario | Expected result | Layer / status |
 |---|---|---|---|
 | OPS-01 | Process without reachable database | /healthz 200; /readyz 503 | HTTP / IMPLEMENTED |
+| OPS-03 | Production Docker image build and inspection | Multi-stage build succeeds; final image runs as non-root and contains binary, CA trust, runtime assets and migrations but no source, Cargo cache, Devbox, PostgreSQL, Mailpit, Keycloak or OAuth2 Proxy | Docker / IMPLEMENTED |
+| OPS-04 | Production container against development PostgreSQL | Explicit migration command succeeds; app serves landing/static assets, `/healthz` and `/readyz`; HTTPS fetch succeeds using system CA trust | Docker + PostgreSQL / IMPLEMENTED |
+| REL-01 | Pull-request Docker workflow | Build completes with GitHub Actions cache and no Docker Hub authentication or image push | CI / IMPLEMENTED |
+| REL-02 | Main and semantic-tag Docker workflow | `main` publishes `latest` and short-SHA tags; `vX.Y.Z` publishes `X.Y.Z`, `X.Y`, and `X`; an existing exact tag aborts release publication | CI + Docker Hub / IMPLEMENTED |
 | API-01 | Fetch OpenAPI | Every implemented operation and error response described | Contract / IMPLEMENTED |
 | CFG-00 | Missing, malformed or non-PostgreSQL config | Startup validation rejects it without echoing secrets | Unit / IMPLEMENTED |
 | DB-00 | PostgreSQL connectivity and baseline migration | `SELECT 1` succeeds and migration version is recorded | PostgreSQL integration / IMPLEMENTED |

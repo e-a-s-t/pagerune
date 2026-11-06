@@ -36,6 +36,15 @@ Run `direnv exec . devbox run check` for formatting, Clippy, unit tests, and Pos
 integration tests. `devbox.lock` and `Cargo.lock` are committed. The application does not
 load `.env`; direnv provides environment variables.
 
+## Production image and releases
+
+The production image is published to Docker Hub as
+[`erjoda/pagerune`](https://hub.docker.com/r/erjoda/pagerune). Build it locally with
+`docker build -t pagerune:local .`; see [docs/Development.md](docs/Development.md) for a
+local run example and [docs/Operations.md](docs/Operations.md) for release instructions.
+The image receives all application configuration and secrets through environment variables;
+it does not contain deployment configuration or credentials.
+
 ## Documentation
 
 - [Requirements](docs/Requirements.md): product scope and acceptance criteria.

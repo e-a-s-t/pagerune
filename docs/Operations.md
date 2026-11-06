@@ -6,6 +6,41 @@ TLS termination. No application PVC. CNPG-managed PostgreSQL has its own storage
 backup and recovery lifecycle. SMTP is configured independently. Example manifests in
 deploy/ are starting points only: not a complete production installation.
 
+## Application image and release
+
+Create the Docker Hub repository **`erjoda/pagerune`** before enabling publication. The
+default can be changed without editing the workflow through the optional GitHub repository
+variable `DOCKERHUB_IMAGE`. Configure these GitHub repository secrets:
+
+- `DOCKERHUB_USERNAME`: Docker Hub account or organization publisher name.
+- `DOCKERHUB_TOKEN`: Docker Hub access token with permission to push that repository.
+
+The `Docker image` workflow builds every pull request without authenticating or pushing.
+A push to `main` publishes `erjoda/pagerune:latest` and
+`erjoda/pagerune:sha-<short-commit-SHA>`. A Git tag matching `v*` uses semantic Docker
+tags: `v1.2.3` publishes `1.2.3`, `1.2`, and `1`. Exact `X.Y.Z` tags are immutable: the
+workflow fails before publishing if that tag already exists. The `X.Y` and `X` aliases are
+intentionally updated by later compatible releases. Tag builds do not publish `latest`.
+
+To release, complete the checks, merge the intended commit to `main`, then create and push
+an annotated semantic tag:
+
+```sh
+git tag -a v1.2.3 -m 'Release v1.2.3'
+git push origin v1.2.3
+```
+
+The production image contains a release PageRune binary, runtime templates/static assets,
+SQLx migrations, CA certificates, and the small HTTP client used by the existing Compose
+health check. It runs as the unprivileged `pagerune` user and contains no source tree,
+Cargo cache, Devbox, PostgreSQL, Mailpit, Keycloak, or OAuth2 Proxy. OCI labels record the
+source repository, revision, version, build timestamp, title, and description.
+
+Use `pagerune migrate` from this image as an explicit pre-rollout migration action. Do not
+run migrations automatically from every application replica. Runtime configuration remains
+environment based; inject database, SMTP, Turnstile, and token-key secrets outside the
+image and set `PAGERUNE_BIND=0.0.0.0:8080` behind a private authenticated HTTPS ingress.
+
 ## Email templates and unsubscribe
 Mount customized `change.html` and `change.txt` files in the directory selected by
 `PAGERUNE_EMAIL_TEMPLATE_DIR` (default `templates/email`). Files are read per notification,
@@ -38,8 +73,9 @@ and mail server. Configure public base URL using the externally visible HTTPS or
 ## Lifecycle
 Migrations run once as an explicit deployment Job before rollout, with compatible
 expand/contract schema changes. Do not have every web replica independently execute DDL.
-Migrations are embedded and applied explicitly through the Devbox migrate command; add
-readiness schema-version checks as schema evolution requires.
+Migrations are embedded and applied explicitly through `pagerune migrate` from the
+production image (or the Devbox migrate command for local development); add readiness
+schema-version checks as schema evolution requires.
 Liveness is independent of database availability. Drain requests and stop claiming work
 on SIGTERM; expired leases recover unfinished jobs. Keep app builds separate from migrator.
 
